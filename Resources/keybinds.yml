@@ -492,6 +492,9 @@ binds:
 - function: ToggleRoundEndSummaryWindow
   type: State
   key: F9
+- function: ToggleFirstPerson
+  type: State
+  key: J
 - function: OpenSandboxWindow
   type: State
   key: B

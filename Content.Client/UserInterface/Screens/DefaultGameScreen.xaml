@@ -8,6 +8,7 @@
     xmlns:widgets="clr-namespace:Content.Client.UserInterface.Systems.Ghost.Widgets"
     xmlns:hotbar="clr-namespace:Content.Client.UserInterface.Systems.Hotbar.Widgets"
     xmlns:controls="clr-namespace:Content.Client.UserInterface.Controls"
+    xmlns:firstPerson="clr-namespace:Content.Client.FirstPerson"
     xmlns:inventory="clr-namespace:Content.Client.UserInterface.Systems.Inventory.Widgets"
     Name="DefaultHud"
     VerticalExpand="False"
@@ -15,6 +16,7 @@
     HorizontalAlignment="Center">
     <LayoutContainer Name="ViewportContainer" HorizontalExpand="True" VerticalExpand="True">
         <controls:MainViewport Name="MainViewport"/>
+        <firstPerson:FirstPersonViewport Name="FirstPersonViewport" Visible="False"/>
     </LayoutContainer>
     <BoxContainer Name="TopLeft" Access="Protected" Orientation="Vertical">
         <BoxContainer Orientation="Horizontal">

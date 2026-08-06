@@ -23,11 +23,31 @@ public sealed class EntityPass
     /// <summary>Closest an entity may be before it is skipped, in tiles.</summary>
     private const float NearPlane = 0.5f;
 
+    /// <summary>
+    /// At or below this draw depth an entity lies flat on the floor plane rather than standing up.
+    /// </summary>
+    /// <remarks>
+    /// Covers subfloor pipes and wires, carpets, catwalks and lattice, floor objects and puddles.
+    /// <see cref="DrawDepth.HighFloorObjects"/> and above (levers, holopads, kudzu) keep standing,
+    /// since those genuinely have height.
+    /// </remarks>
+    private const int FlatDepthCutoff = (int) Content.Shared.DrawDepth.DrawDepth.Puddles;
+
     private readonly EntityLookupSystem _lookup;
     private readonly SharedTransformSystem _xform;
 
+    /// <summary>Walkable floor structures: catwalks, lattice, carpets.</summary>
+    private static readonly Color WalkwayColor = Color.FromHex("#6e737f");
+
+    /// <summary>Exposed pipes and wiring below the plating.</summary>
+    private static readonly Color SubfloorColor = Color.FromHex("#4a4f5a");
+
     private readonly HashSet<Entity<SpriteComponent>> _candidates = new();
     private readonly List<Billboard> _billboards = new();
+    private readonly List<FlatTile> _flats = new();
+
+    private readonly DrawVertexUV2DColor[] _flatVerts = new DrawVertexUV2DColor[6 * 512];
+    private int _vertCount;
 
     private EntityQuery<FixturesComponent> _fixtureQuery;
 
@@ -87,6 +107,7 @@ public sealed class EntityPass
     {
         _candidates.Clear();
         _billboards.Clear();
+        _flats.Clear();
 
         // The lookup is world-space, so query around the camera's world position.
         Matrix3x2.Invert(invGrid, out var gridMatrix);
@@ -111,6 +132,21 @@ public sealed class EntityPass
             // again as a camera-facing card of its top-down sprite painted over it.
             if (IsWallGeometry(uid))
                 continue;
+
+            // Floor-flat things — catwalks, lattice, carpets, puddles — are drawn from above in 2D.
+            // Standing their sprite up as a camera-facing card turns a walkway you are standing on
+            // into a wall of grating in front of your face. They cannot simply be dropped either:
+            // over open space a catwalk IS the floor, and not drawing it means walking into space
+            // and dying. So they get projected onto the floor plane as flat tiles instead.
+            if (candidate.Comp.DrawDepth <= FlatDepthCutoff)
+            {
+                var flatPos = Vector2.Transform(_xform.GetWorldPosition(uid), invGrid);
+                var flatTile = new Vector2i((int) MathF.Floor(flatPos.X), (int) MathF.Floor(flatPos.Y));
+                var flatDepth = camera.WorldToCamera(new Vector2(flatTile.X + 0.5f, flatTile.Y + 0.5f)).Y;
+
+                _flats.Add(new FlatTile(flatTile, candidate.Comp.DrawDepth, flatDepth));
+                continue;
+            }
 
             var (worldPos, worldRot) = _xform.GetWorldPositionRotation(uid);
             var gridPos = Vector2.Transform(worldPos, invGrid);
@@ -141,6 +177,8 @@ public sealed class EntityPass
             _billboards.Add(new Billboard(uid, candidate.Comp, screenX, cam.Y, worldRot - gridRot, lift));
         }
 
+        DrawFlats(handle, camera, depth, width, height, horizon);
+
         // No depth buffer exists (all vertex positions are Vector2), so sort far-to-near and let
         // the painter's algorithm resolve overlap.
         _billboards.Sort(static (a, b) => b.Depth.CompareTo(a.Depth));
@@ -163,6 +201,129 @@ public sealed class EntityPass
                 sprite: billboard.Sprite);
         }
     }
+
+    /// <summary>
+    /// Draws floor-flat entities as quads lying on the floor plane.
+    /// </summary>
+    /// <remarks>
+    /// Flat colour rather than the entity's sprite: sampling RSI frames means handing the shared
+    /// sprite atlas to <see cref="DrawingHandleBase.DrawPrimitives"/>, which corrupts rendering
+    /// globally. The point here is conveying "there is solid footing on this tile", which colour
+    /// alone does. Drawn before billboards so items sit on top of the floor rather than under it.
+    /// </remarks>
+    private void DrawFlats(
+        DrawingHandleScreen handle,
+        FirstPersonCamera camera,
+        float[] depth,
+        int width,
+        int height,
+        float horizon)
+    {
+        if (_flats.Count == 0)
+            return;
+
+        // Nearest first, then by draw depth. Distinct tiles project to disjoint screen quads so
+        // their relative order is free, which lets distance drive it — and that matters because the
+        // vertex buffer is finite: when it fills, the tiles given up are the distant ones rather
+        // than whichever happened to sort last. Two entities on the *same* tile share a distance,
+        // so the draw-depth tiebreak still lays subfloor pipes under the catwalk above them.
+        _flats.Sort(static (a, b) =>
+        {
+            var byDistance = a.Distance.CompareTo(b.Distance);
+            return byDistance != 0 ? byDistance : a.DrawDepth.CompareTo(b.DrawDepth);
+        });
+
+        _vertCount = 0;
+
+        foreach (var flat in _flats)
+        {
+            var t = flat.Tile;
+
+            if (!ProjectFloor(camera, new Vector2(t.X, t.Y), width, height, horizon, out var a) ||
+                !ProjectFloor(camera, new Vector2(t.X + 1, t.Y), width, height, horizon, out var b) ||
+                !ProjectFloor(camera, new Vector2(t.X + 1, t.Y + 1), width, height, horizon, out var c) ||
+                !ProjectFloor(camera, new Vector2(t.X, t.Y + 1), width, height, horizon, out var d))
+            {
+                continue;
+            }
+
+            // Cull tiles that project entirely off one side. Without this, a tile beside the camera
+            // projects to an extreme screen X and smears a long wedge across the floor.
+            if ((a.X < 0 && b.X < 0 && c.X < 0 && d.X < 0) ||
+                (a.X > width && b.X > width && c.X > width && d.X > width))
+            {
+                continue;
+            }
+
+            // Occlusion against walls, sampled at the tile centre rather than per pixel.
+            var centreX = (int) ((a.X + c.X) / 2f);
+            var centreDepth = flat.Distance;
+            if (centreX >= 0 && centreX < depth.Length && depth[centreX] < centreDepth)
+                continue;
+
+            var shade = Math.Max(1f / (1f + centreDepth * 0.04f), 0.45f);
+            var baseColor = flat.DrawDepth <= (int) Content.Shared.DrawDepth.DrawDepth.BelowFloor
+                ? SubfloorColor
+                : WalkwayColor;
+
+            var color = Color.FromSrgb(new Color(
+                baseColor.R * shade,
+                baseColor.G * shade,
+                baseColor.B * shade,
+                1f));
+
+            if (_vertCount + 6 > _flatVerts.Length)
+                break;
+
+            AppendTriangle(a, b, c, color);
+            AppendTriangle(a, c, d, color);
+        }
+
+        if (_vertCount > 0)
+            handle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, Texture.White, _flatVerts.AsSpan(0, _vertCount));
+    }
+
+    /// <summary>
+    /// Projects a point on the floor plane into screen space. False only if it is behind the camera.
+    /// </summary>
+    /// <remarks>
+    /// A corner in front of the camera but nearer than the near plane is clamped rather than
+    /// rejected. Rejecting it discarded the entire tile, and because all four corners must survive,
+    /// that threw away the ground immediately in front of the player — the one place footing matters
+    /// most. Corners genuinely behind the camera still fail: clamping those would force a positive
+    /// depth onto a negative one and smear the quad across the screen.
+    /// </remarks>
+    private static bool ProjectFloor(
+        FirstPersonCamera camera,
+        Vector2 gridPos,
+        int width,
+        int height,
+        float horizon,
+        out Vector2 screen)
+    {
+        screen = default;
+
+        var cam = camera.WorldToCamera(gridPos);
+        if (cam.Y <= 0f)
+            return false;
+
+        var depth = MathF.Max(cam.Y, NearPlane);
+
+        screen = new Vector2(
+            width / 2f * (1f + cam.X / depth),
+            horizon + height / depth * camera.Height);
+
+        return true;
+    }
+
+    private void AppendTriangle(Vector2 a, Vector2 b, Vector2 c, Color color)
+    {
+        _flatVerts[_vertCount++] = new DrawVertexUV2DColor(a, Vector2.Zero, color);
+        _flatVerts[_vertCount++] = new DrawVertexUV2DColor(b, Vector2.Zero, color);
+        _flatVerts[_vertCount++] = new DrawVertexUV2DColor(c, Vector2.Zero, color);
+    }
+
+    private readonly record struct FlatTile(Vector2i Tile, int DrawDepth, float Distance);
 
     private readonly record struct Billboard(
         EntityUid Uid,

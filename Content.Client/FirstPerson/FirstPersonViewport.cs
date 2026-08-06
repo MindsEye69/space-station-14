@@ -2,12 +2,15 @@ using System.Numerics;
 using Content.Client.FirstPerson.Camera;
 using Content.Client.FirstPerson.Render;
 using Robust.Client.Graphics;
+using Robust.Client.Input;
 using Robust.Client.Player;
 using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
+using Robust.Client.UserInterface.CustomControls;
 using Robust.Shared.Configuration;
 using Robust.Shared.Graphics;
+using Robust.Shared.Map;
 using Robust.Shared.Utility;
 
 namespace Content.Client.FirstPerson;
@@ -21,13 +24,20 @@ namespace Content.Client.FirstPerson;
 /// nearest-neighbour. This caps per-frame rasterisation cost regardless of window size and matches
 /// the game's pixel-art look.
 /// </remarks>
-public sealed class FirstPersonViewport : UIWidget
+public sealed class FirstPersonViewport : UIWidget, IViewportControl
 {
+    /// <summary>How far the crosshair reaches, in tiles, when nothing blocks it sooner.</summary>
+    private const float PickRange = 16f;
+
+    /// <summary>Step size while marching the pick ray, in tiles.</summary>
+    private const float PickStep = 0.2f;
+
     [Dependency] private IClyde _clyde = default!;
     [Dependency] private IEntityManager _entMan = default!;
     [Dependency] private IPlayerManager _playerMan = default!;
     [Dependency] private IConfigurationManager _cfg = default!;
     [Dependency] private IResourceCache _resCache = default!;
+    [Dependency] private IInputManager _inputMan = default!;
 
     private IRenderTexture? _target;
     private Vector2i _targetSize;
@@ -51,6 +61,37 @@ public sealed class FirstPersonViewport : UIWidget
         RectClipContent = true;
         MouseFilter = MouseFilterMode.Stop;
         _renderAction = RenderToTarget;
+    }
+
+    /// <summary>
+    /// Hands clicks to the game as coming from *this* viewport.
+    /// </summary>
+    /// <remarks>
+    /// Implementing <see cref="IViewportControl"/> is necessary but not sufficient. InputManager
+    /// calls <c>ViewportKeyEvent(null, ...)</c> when the UI declines a bind, and
+    /// <c>GameplayStateBase.OnKeyBindStateChanged</c> only resolves a target when the viewport is
+    /// non-null and implements the interface. A control has to nominate itself, exactly as
+    /// <c>ScalingViewport</c> does. Without this every interaction still arrived with
+    /// <see cref="EntityCoordinates.Invalid"/> and no target.
+    /// </remarks>
+    protected override void KeyBindDown(GUIBoundKeyEventArgs args)
+    {
+        base.KeyBindDown(args);
+
+        if (args.Handled)
+            return;
+
+        _inputMan.ViewportKeyEvent(this, args);
+    }
+
+    protected override void KeyBindUp(GUIBoundKeyEventArgs args)
+    {
+        base.KeyBindUp(args);
+
+        if (args.Handled)
+            return;
+
+        _inputMan.ViewportKeyEvent(this, args);
     }
 
     protected override void MouseMove(GUIMouseMoveEventArgs args)
@@ -149,6 +190,101 @@ public sealed class FirstPersonViewport : UIWidget
     private static Texture ResolveWallTexture()
     {
         return Texture.White;
+    }
+
+    /// <summary>
+    /// Resolves a screen point to the map point the player is aiming at.
+    /// </summary>
+    /// <remarks>
+    /// This is the whole reason the widget implements <see cref="IViewportControl"/>.
+    /// <c>GameplayStateBase.OnKeyBindStateChanged</c> is the single funnel every world interaction
+    /// passes through — use, alt-use, examine, drag-drop, context menus — and it only fills in the
+    /// command's coordinates and target when the viewport implements this interface. Without it
+    /// every interaction was dispatched with <see cref="EntityCoordinates.Invalid"/> and no target,
+    /// which is why first person could walk but not touch anything.
+    ///
+    /// The ray is marched rather than simply run to the wall, because stopping at the wall would
+    /// mean aiming straight through the person standing in front of it.
+    /// </remarks>
+    public MapCoordinates PixelToMap(Vector2 point)
+    {
+        if (_playerMan.LocalEntity is not { } player || !_entMan.EntityExists(player))
+            return MapCoordinates.Nullspace;
+
+        var mapId = _entMan.GetComponent<TransformComponent>(player).MapID;
+        var size = _targetSize == Vector2i.Zero ? new Vector2i(640, 360) : _targetSize;
+
+        // With the cursor captured its OS position is meaningless, so aim dead centre: a real
+        // crosshair. With capture off the cursor is visible and free-aim is what the player expects.
+        var local = _cfg.GetCVar(FirstPersonCVars.MouseCapture)
+            ? new Vector2(size.X / 2f, size.Y / 2f)
+            : (point - GlobalPixelPosition) / Vector2.Max(PixelSize, Vector2.One) * size;
+
+        var column = (int) Math.Clamp(local.X, 0, size.X - 1);
+        var dir = Vector2.Normalize(Camera.RayDirection(column, size.X));
+
+        // Never reach past the wall the crosshair is looking at.
+        var limit = MathF.Min(_renderer?.GetWallDepth(column) ?? PickRange, PickRange);
+
+        var lookup = _entMan.System<EntityLookupSystem>();
+        var origin = Camera.Position;
+
+        for (var travelled = PickStep; travelled <= limit; travelled += PickStep)
+        {
+            var probe = new MapCoordinates(origin + dir * travelled, mapId);
+
+            // Excluding Contained is essential. The default flags include it, so the player's own
+            // worn clothing and carried items — which sit at the player's own position — are found
+            // on the very first step and every click targets your own shoes.
+            foreach (var found in lookup.GetEntitiesInRange(probe, PickStep, LookupFlags.All & ~LookupFlags.Contained))
+            {
+                if (found == player)
+                    continue;
+
+                return probe;
+            }
+        }
+
+        // Nothing in the way: hand back the far end so the player can still click bare floor.
+        return new MapCoordinates(origin + dir * limit, mapId);
+    }
+
+    public MapCoordinates ScreenToMap(Vector2 coords) => PixelToMap(coords);
+
+    /// <summary>
+    /// Projects a world point back to the screen, for callers that want to place UI over an entity.
+    /// </summary>
+    public Vector2 WorldToScreen(Vector2 map)
+    {
+        var size = _targetSize == Vector2i.Zero ? new Vector2i(640, 360) : _targetSize;
+        var cam = Camera.WorldToCamera(map);
+
+        // Behind the camera. There is no sensible screen position, so park it off-screen rather
+        // than returning a mirrored one that a caller would happily draw.
+        if (cam.Y <= 0.01f)
+            return new Vector2(float.MinValue, float.MinValue);
+
+        var local = new Vector2(
+            size.X / 2f * (1f + cam.X / cam.Y),
+            size.Y / 2f + Camera.PitchPixels + size.Y / cam.Y * (Camera.Height - 0.5f));
+
+        return GlobalPixelPosition + local / size * Vector2.Max(PixelSize, Vector2.One);
+    }
+
+    /// <summary>
+    /// Not representable. A perspective projection is not affine, so it cannot be expressed as a
+    /// <see cref="Matrix3x2"/> — use <see cref="WorldToScreen"/> instead. Identity is returned so
+    /// that callers reaching for this get something inert rather than NaNs.
+    /// </summary>
+    public Matrix3x2 GetWorldToScreenMatrix() => Matrix3x2.Identity;
+
+    /// <summary>
+    /// Control-local to screen, which genuinely is affine.
+    /// </summary>
+    public Matrix3x2 GetLocalToScreenMatrix()
+    {
+        var pos = GlobalPixelPosition;
+        return new Matrix3x2(1f, 0f, 0f, 1f, pos.X, pos.Y);
     }
 
     protected override void Dispose(bool disposing)

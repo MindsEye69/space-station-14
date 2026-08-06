@@ -284,14 +284,15 @@ public sealed class EntityPass
     }
 
     /// <summary>
-    /// Projects a point on the floor plane into screen space. False only if it is behind the camera.
+    /// Projects a point on the floor plane into screen space. False if it is nearer than the near
+    /// plane, which discards the whole tile.
     /// </summary>
     /// <remarks>
-    /// A corner in front of the camera but nearer than the near plane is clamped rather than
-    /// rejected. Rejecting it discarded the entire tile, and because all four corners must survive,
-    /// that threw away the ground immediately in front of the player — the one place footing matters
-    /// most. Corners genuinely behind the camera still fail: clamping those would force a positive
-    /// depth onto a negative one and smear the quad across the screen.
+    /// Discarding is deliberate, and clamping the depth instead is a trap that was tried and
+    /// reverted. Screen Y goes as <c>height / depth</c>, so a corner just in front of the camera
+    /// lands hundreds of pixels below the horizon while the tile's far corners sit at ordinary
+    /// positions — the quad becomes a long diagonal wedge sweeping across the view as you walk.
+    /// Losing the tile underfoot, which is mostly out of frame anyway, is much cheaper than that.
     /// </remarks>
     private static bool ProjectFloor(
         FirstPersonCamera camera,
@@ -304,14 +305,12 @@ public sealed class EntityPass
         screen = default;
 
         var cam = camera.WorldToCamera(gridPos);
-        if (cam.Y <= 0f)
+        if (cam.Y <= NearPlane)
             return false;
 
-        var depth = MathF.Max(cam.Y, NearPlane);
-
         screen = new Vector2(
-            width / 2f * (1f + cam.X / depth),
-            horizon + height / depth * camera.Height);
+            width / 2f * (1f + cam.X / cam.Y),
+            horizon + height / cam.Y * camera.Height);
 
         return true;
     }

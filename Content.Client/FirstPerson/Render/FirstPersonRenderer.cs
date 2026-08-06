@@ -36,6 +36,16 @@ public sealed class FirstPersonRenderer
         _entityPass = new EntityPass(entMan, entMan.System<EntityLookupSystem>(), _xform);
     }
 
+    /// <summary>
+    /// Perpendicular distance to the wall in a screen column, or <see cref="float.MaxValue"/> if the
+    /// ray reached nothing. Used to stop crosshair picking from reaching through walls.
+    /// </summary>
+    public float GetWallDepth(int column)
+    {
+        var depth = _wallPass.Depth;
+        return column >= 0 && column < depth.Length ? depth[column] : float.MaxValue;
+    }
+
     public void Render(
         DrawingHandleScreen handle,
         FirstPersonCamera camera,

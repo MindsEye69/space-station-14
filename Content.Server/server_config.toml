@@ -21,6 +21,16 @@ upnp = false
 max_connections = 256
 
 [game]
+# NOTE ON BUILD PRESETS: /ConfigPresets/Build/development.toml is loaded AFTER this file, but via
+# LoadDefaultsFromTomlStream — it only supplies DEFAULTS. So any value written explicitly here wins
+# over the preset, even in a dev build. Several settings below were silently defeating the preset
+# that way; each is now set to the value that actually makes local development work, with the
+# public-server value noted alongside.
+
+# Wait in the lobby instead of starting a round at boot. The development preset sets this false
+# ("straight in-game baby"), which means you connect after the round has already begun and late-join
+# has to find you a free job. True lets you pick a job and ready up instead.
+lobbyenabled = true
 # Name of the server. This is what will be displayed in the server list and lobby.
 hostname = "MyServer"
 # Description of the server. This is what will be displayed in the server list.
@@ -30,7 +40,10 @@ soft_max_players = 30
 # Controls the lobby timer in seconds.
 lobbyduration = 150
 # Should roles be restricted based on time?
-role_timers = true
+# False locally, matching the development preset. With this true, a fresh account has no playtime, so
+# every department is gated behind hours of it and the only joinable role is Captain — take that and
+# late-join has nothing left to give you, so you spawn as an observer. Set true for a public server.
+role_timers = false
 # Check connecting player ip against the IPIntel API (aka stop VPN/Proxy connections). Useful for hosts.
 # Read more here https://getipintel.net/
 ipintel_enabled = false
@@ -59,7 +72,9 @@ id = "unknown_server_id"
 
 [events]
 # Controls if the game should run station events. (Meteors, Sleeper Syndicates ETC)
-enabled = true
+# False locally, matching the development preset — random events killing the test character partway
+# through a session makes anything long-running hard to work on. Set true for a public server.
+enabled = false
 
 [shuttle]
 # Should the emergency shuttle be allowed to launch early by command staff?

@@ -1,164 +1,169 @@
-# M1 Handoff — First-Person View
+# First-Person View — Status
 
-Per spec §11, this states what changed, how it was verified, and — importantly — what was **not**
-verified.
+Per spec §11: what this is, how it was verified, and — importantly — what was **not** verified.
 
 ---
 
 ## Status
 
-**Code complete and compiling. Not yet exercised in a running client.** The interactive
-walk-around test that spec §8/M1 defines as the acceptance criterion has not been performed. Do not
-treat M1 as done until it has.
+**Working and played in a live session.** Walls, corridors, mouse-look, camera-relative movement,
+half-height furniture and floor-flat structures have all been exercised against a running server and
+look right. Performance, ghost/dead states, shuttles, rotated grids and top-down parity have **not**
+been checked — see §5.
 
 ---
 
-## 1. What changed
+## 1. What it is
 
-### New files — all under `Content.Client/FirstPerson/`
+A Wolfenstein-style raycaster, toggled with **`J`**. Renders at a low internal resolution into a
+render target and blits it upscaled with nearest-neighbour, so cost is independent of window size.
 
-| File | Reason |
+All work happens in the player's **grid-local** space. Tile indices and anchored lookups are
+grid-local by definition, and a station can sit at an arbitrary position *and rotation*, so the
+camera is converted into that frame once per frame in `FirstPersonRenderer`.
+
+### Files — all under `Content.Client/FirstPerson/`
+
+| File | Role |
 |---|---|
-| `FirstPersonCVars.cs` | CVar definitions (`firstperson.*`). Separate `[CVarDefs]` class, which is what `Content.Shared/CCVar/CCVars.cs:12` explicitly tells forks to do. |
-| `FirstPersonSystem.cs` | Mode state, toggle keybind, per-frame camera position update, movement-frame sync. |
-| `FirstPersonViewport.cs` | `UIWidget` owning the low-res render target; mouse-look; blits upscaled. |
-| `Camera/FirstPersonCamera.cs` | Camera state and projection (yaw/pitch-as-horizon-shift/fov, ray fan, world→camera). |
-| `Render/FirstPersonRenderer.cs` | Orchestrates passes; converts the camera into grid-local space. |
-| `Render/WallPass.cs` | Per-column DDA raycast, wall column emission, `depth[]` output. |
-| `Render/FloorPass.cs` | Flat floor/ceiling bands (M1 placeholder). |
-| `Render/EntityPass.cs` | Billboard projection, direction selection, far-to-near sort, wall clipping. |
-| `Render/TileSolidityCache.cs` | Per-frame tile solidity cache (see §4 note on the perf risk this addresses). |
-| `M0-FINDINGS.md`, `M1-HANDOFF.md` | Documentation. |
+| `FirstPersonCVars.cs` | CVar definitions. Separate `[CVarDefs]` class, which `Content.Shared/CCVar/CCVars.cs:12` tells forks to do. |
+| `FirstPersonSystem.cs` | Mode state, toggle, camera position, camera-relative movement remapping. |
+| `FirstPersonViewport.cs` | `UIWidget` owning the render target; mouse-look; blits upscaled. |
+| `Camera/FirstPersonCamera.cs` | Camera state and projection (yaw, pitch-as-horizon-shift, fov, ray fan, world→camera). |
+| `Render/FirstPersonRenderer.cs` | Runs the passes; converts the camera into grid-local space. |
+| `Render/WallPass.cs` | Per-column DDA. Full-height columns and waist-height ones; `Depth[]` output. |
+| `Render/FloorPass.cs` | Flat floor/ceiling bands. **Still a placeholder.** |
+| `Render/EntityPass.cs` | Billboards, plus floor-plane projection for flat structures. |
+| `Render/TileSolidityCache.cs` | Per-tile height class, cached per frame. |
 
-### Modified files — wiring only, minimal
+### Modified elsewhere — wiring only
 
-| File | Change |
-|---|---|
-| `Content.Shared/Input/ContentKeyFunctions.cs` | +1 line: `ToggleFirstPerson`. |
-| `Content.Client/Input/ContentContexts.cs` | +1 line: register in the **`common`** context (not `human`), so the toggle works while ghosted/dead per spec §7.1. |
-| `Resources/keybinds.yml` | +3 lines: default binding. |
-| `Content.Client/UserInterface/Screens/DefaultGameScreen.xaml` (+`.xaml.cs`) | Sibling viewport, `Visible=False`, plus anchor preset. |
-| `Content.Client/UserInterface/Screens/SeparatedChatGameScreen.xaml` (+`.xaml.cs`) | Same. |
+`Content.Shared/Input/ContentKeyFunctions.cs` (+1), `Content.Client/Input/ContentContexts.cs` (+1, in
+the **`common`** context so the toggle works while ghosted), `Resources/keybinds.yml` (+3), and both
+game screens get a sibling viewport with `Visible=False` and a `Wide` anchor preset.
 
-No server code, no `RobustToolbox` changes, no refactors of existing systems. `git status` shows
-exactly the 7 modified files above.
+No server code and no `RobustToolbox` changes.
 
 ---
 
-## 2. Deviations from the spec — each deliberate, none silent
+## 2. CVars
 
-1. **Default keybind is `J`, not `V`.** The spec said "Default binding: `V`. Confirm no conflict
-   before assigning." Checked: `V` is already `OpenBackpack` (`Resources/keybinds.yml:270`), and
-   `Shift+V`/`Ctrl+V`/`Alt+V` are also taken. `J`, `L`, `N`, `M` are the only fully-unbound letters;
-   picked `J`. User-rebindable, so this is a low-stakes default.
+| CVar | Default | Purpose |
+|---|---|---|
+| `firstperson.render_width` / `_height` | 640 / 360 | Internal render resolution. |
+| `firstperson.fov` | 70 | Horizontal FOV, degrees. |
+| `firstperson.max_range` | 32 | Max DDA distance, tiles. |
+| `firstperson.eye_height` | 0.55 | Eye height above the floor, tiles. |
+| `firstperson.mouse_sensitivity` | 0.3 | |
+| `firstperson.mouse_capture` | true | Escape hatch if look misbehaves. |
+| `firstperson.camera_relative_movement` | true | Off restores vanilla grid-relative WASD. |
+| `firstperson.draw_entities` | true | Off isolates geometry from billboards. |
+| `firstperson.draw_half_height` | true | Off isolates full-height walls from waist-height ones. |
+| `firstperson.half_height` | 0.5 | Counter height, tiles. |
 
-2. **`overrideDirection` takes `Direction`, not `RsiDirection`.** Spec §5.4 said to quantise to
-   `RsiDirection` via `LayerGetDirections`. The actual signature
-   (`DrawingHandleScreen.cs:227-235`) takes `Shared.Maths.Direction?`, and `DrawEntity` resolves the
-   RSI direction internally. So the code uses `Angle.GetDir()`
-   (`RobustToolbox/Robust.Shared.Maths/Angle.cs:74`) and lets the engine do the per-layer
-   `Dir1/Dir4/Dir8` work. Simpler and more correct than the spec's plan.
-
-3. **No `FirstPersonComponent.cs`.** Spec §4 lists it as a "client-only marker + per-player camera
-   state". There is exactly one local player and one camera, so the camera lives on
-   `FirstPersonViewport` and the mode flag on `FirstPersonSystem`. An empty marker component would
-   have been an abstraction with no consumer. Trivial to add if per-entity state ever appears.
-
-4. **No `Camera/CameraInput.cs`.** Mouse-look is ~4 lines (`FirstPersonViewport.MouseMove`);
-   a separate class for "multiply delta by sensitivity" wasn't warranted.
-
-5. **All rendering happens in grid-local space, which the spec did not mention.** Tile indices and
-   `GetAnchoredEntitiesEnumerator` are grid-local by definition, and a station can sit at an
-   arbitrary world position *and rotation*. Feeding world coordinates into the DDA would break on any
-   rotated grid (and on shuttles generally). `FirstPersonRenderer.Render` converts the camera into
-   the player's grid frame once per frame and the passes work there throughout.
-
-6. **`FloorPass` is two flat bands, not per-tile flat colours.** Spec §5.3 M1 says "flat colour per
-   tile, sampled from the tile's texture". This does flat colour for the whole floor/ceiling. It is
-   strictly a placeholder either way and the cheaper version was enough to establish the horizon;
-   per-tile colour is a small extension when the palette extractor of §12.3 exists.
+Set them with the `cvar` command — `cvar firstperson.draw_entities 0`. Typing the bare name does
+nothing; it is not a command.
 
 ---
 
-## 3. How it was verified
+## 3. Decisions worth knowing
 
-- **Baseline established first.** Clean checkout at the pinned commit built with **0 errors, 463
-  warnings** before any of my code existed — so the numbers below are attributable.
-- **`dotnet build SpaceStation14.slnx`** → **0 errors**, 303 warnings (full solution; different
-  project set than the Content.Client-only number above). No new warnings introduced by these files
-  after fixing the repo's `RA0051` convention (`[Dependency]` fields must not be `readonly`).
-- **`dotnet test Content.Tests`** → **Passed: 419, Failed: 0, Skipped: 1**. No existing test was
-  modified.
-- **Server boots and listens.** `Content.Server` starts, runs migrations, starts a Sandbox round,
-  and accepts connections on port 1212 (verified with `Test-NetConnection`).
-- **Client boots.** `Content.Client` launches, passes the IL sandbox verifier (which is what would
-  reject content code touching engine internals), creates its GL context, and opens its window.
-- **One real bug found and fixed pre-test:** the viewport was added to a `LayoutContainer` without an
-  anchor preset, which would have given it zero size and rendered nothing. `MainViewport` gets
-  `SetAnchorPreset(..., LayoutPreset.Wide)`; mine now does too, in both screens.
+Each of these was a bug first. They are recorded because the wrong version looked reasonable.
 
-### Environment change made along the way
+1. **Geometry is selected by collision layer, not `OccluderComponent`.** Occluder means "blocks
+   light", not "is a wall". `GlassLayer` is `WallLayer` minus `Opaque`, so every window, grille and
+   glass airlock carries no occluder — using occluders left holes wherever the station used glass.
+   `HighImpassable` selects full-height structures, `MidImpassable` waist-height ones. SS14 has no
+   z-axis, but that bit pair is a usable two-level height model already present in the data.
 
-The repo requires **.NET SDK 10.0.100** (`global.json`) and only 9.0.203 was installed — nothing
-could build. Installed **10.0.302** via winget (satisfies `rollForward: latestFeature`), side by side;
-the 9.x SDK is untouched.
+2. **`WallPass` and `EntityPass` must stay exact complements.** Anything rasterised as geometry is
+   excluded from the billboard pass. Otherwise every wall is drawn twice, the second time as a
+   camera-facing card of its top-down sprite pasted over the correct column — which reads as
+   corridors vanishing behind floating slabs.
 
----
+3. **Mobs stay billboards; furniture does not.** Mob sprites are already drawn side-on with cardinal
+   facings, which is exactly Doom's directional-sprite model. Furniture art is drawn from *above* and
+   can never look right on a camera-facing card, so it has to be geometry.
 
-## 4. What was NOT verified — read this part
+4. **Floor-flat things are projected onto the floor plane.** Catwalks, lattice, carpets, puddles and
+   exposed subfloor pipes (`DrawDepth.Puddles` and below) would otherwise stand up as a wall of
+   grating in your face. They cannot simply be dropped — over open space a catwalk *is* the floor.
 
-Everything in this section is honest unknown, not hedging.
+5. **Waist-height hits do not stop the ray and do not write `Depth[]`.** You can see over a counter,
+   and something standing behind one must remain visible.
 
-1. **Nothing has been seen on screen.** No frame of the first-person view has ever been rendered and
-   looked at. Walls, floors, billboards, the toggle, mouse-look — all compile, none are known to
-   work. The `dotnet build` + `dotnet test` evidence above says the code is *type-correct*, not that
-   it is *right*. I could not drive the client myself: the computer-use tool resolves applications
-   against the Start menu, and SS14 runs from source, so it never matched the window.
+6. **Movement remaps keys; it does not rotate the movement frame.** `RotateCamera` only moves in 90°
+   steps and the mover then glides toward that over `LerpTime`, so "forward" lagged the view by up to
+   45° and slid. Instead the raw WASD press is swallowed and the grid direction the player meant is
+   pressed through the normal predicted input pipeline. Two details are load-bearing:
+   - Emitted commands use `replay: true`, or they collide with the physical key in `InputSystem`'s
+     held-state table and get dropped as duplicates.
+   - The handler passes through when `InputSystem.Predicted` is set. Prediction replays dispatched
+     commands every tick; intercepting its own commands there applied movement for one frame and
+     rolled it back, which showed up as flickering.
+   - Key **releases** always reach the mover. If a key was held when the mode was toggled on, the
+     mover holds that raw direction and the release is the only thing that will ever clear it.
 
-2. **The projection math is unexercised.** Column heights, the `1/depth` scale factor, the
-   `PixelsPerMeter = 32` billboard divisor, and the horizon placement are all plausible and
-   dimensionally sensible but have never produced a pixel. Expect at least one of the scale
-   constants to be wrong on first run. This is the most likely source of "it renders, but looks
-   wrong."
+7. **Mouse-look subtracts yaw.** `WallPass` fans rays from `Direction - Plane` on the left edge to
+   `Direction + Plane` on the right, and `Plane` is forward turned clockwise, so screen-right is a
+   *lower* yaw. Adding turned the view away from the mouse — and because that mirrors the world
+   relative to the movement maths, it also inverted strafing while leaving forward/back correct.
 
-3. **Mouse-look delivery is an assumption.** `Control.MouseMove` receives `GUIMouseMoveEventArgs`
-   with a `Relative` delta, and `IClydeWindow.SetRelativeMouseMode(true)` hides and confines the
-   cursor. Whether UI mouse-move events still route to the control under a *captured* cursor was not
-   confirmed. If look doesn't work, that is the first thing to check —
-   `firstperson.mouse_capture false` disables capture as an escape hatch.
+8. **Walls are flat-shaded, not textured.** Every RSI is packed into one shared atlas, and routing
+   that atlas through `DrawPrimitives` corrupts top-down rendering. Walls use `Texture.White` with
+   per-vertex colour. SS14 has no side-elevation wall art anyway.
 
-4. **The M0-4 movement-frame concern is still open at runtime.** The code goes through
-   `InputSystem.HandleInputCommand` (the verified-correct path), but the actual claim — that
-   repeated programmatic `CameraRotateLeft/Right` keeps client and server rotation converged with no
-   snap-back — has not been observed in a live session. Watch `InputMoverComponent.RelativeRotation`
-   in ViewVariables while turning. The hysteresis (`π/4`) and the 1-second lerp
-   (`SharedMoverController.LerpRotation`, `SharedMoverController.cs:386`) mean the frame *glides*
-   rather than snaps; per M0 that is inherent, not a bug, but whether it *feels* acceptable is a
-   judgement that requires playing it.
+### Deviations from the spec
 
-5. **No performance measurement whatsoever.** Spec §8/M1 asks for a frame-time number at 640×360.
-   None taken. The `TileSolidityCache` addresses the spec's §9.4 concern (per-column anchored-entity
-   enumeration) by design, but "designed not to be slow" is not "measured".
-
-6. **Untested states:** ghost, dead, inside a locker, round restart, no grid (in space — the wall and
-   entity passes return early, floors still draw, which is untested), multiple grids, shuttles,
-   rotated grids. The grid-local work in §2.5 was written *for* rotated grids but has never seen one.
-
-7. **Toggle-stress and leak behaviour untested.** Spec asks for "50 toggles in 10 seconds without
-   leaking render targets". The target is only reallocated on size change and disposed in
-   `Dispose`, so it should be fine — unverified.
-
-8. **Top-down parity not proven.** The spec's most important safety property ("top-down mode must be
-   bit-identical to upstream") is *argued* — the renderer only reads ECS state, and the mode is off
-   by default — but not *demonstrated*. The §12.3 parity harness does not exist.
+- Default bind is **`J`**, not `V` — `V` is `OpenBackpack`, and `Shift/Ctrl/Alt+V` are all taken.
+- `overrideDirection` takes `Direction`, not `RsiDirection`; `DrawEntity` resolves the RSI direction
+  itself.
+- No `FirstPersonComponent` and no `Camera/CameraInput.cs` — one local player, one camera, and
+  mouse-look is four lines.
+- `FloorPass` is two flat bands rather than per-tile colour. Still the placeholder the spec called M2.
 
 ---
 
-## 5. Next steps, in order
+## 4. Verified
 
-1. Run the client, connect to `localhost`, join the round, press **`J`**. Look at what happens.
-   Expect to iterate on scale constants.
-2. Check the client log for exceptions on toggle.
-3. If look feels wrong, try `firstperson.mouse_capture false` and compare.
-4. Measure a frame time (spec §12.1: Tracy is already wired in, `prof.tracy.enabled`).
-5. Then, and only then, consider M1 accepted.
+Live session against a local server, playing as Captain:
+
+- Walls, corridors and glass structures render with correct perspective.
+- Mouse-look tracks the mouse; camera-relative movement walks where you look and steers cleanly.
+- Counters render as short geometry; items on them sit on top rather than sinking.
+- Catwalks and lattice read as floor rather than as grating in your face.
+- `dotnet build SpaceStation14.slnx` → 0 errors. `dotnet test Content.Tests` → 419 passed, 0 failed.
+- Client passes the IL sandbox verifier. Note it rejects `stackalloc` (`localloc`) — that was caught
+  the hard way.
+
+---
+
+## 5. NOT verified — read this part
+
+1. **No performance measurement.** Spec §8 asks for a frame time at 640×360. None taken. The per-tile
+   solidity cache exists precisely because a 640-column cast re-tests tiles constantly, but "designed
+   not to be slow" is not "measured". Tracy is already wired in (`prof.tracy.enabled`).
+2. **Untested states:** ghost, dead, inside a locker, round restart, no grid (in space), multiple
+   grids, shuttles, rotated grids. The grid-local work was written *for* rotated grids but has never
+   seen one.
+3. **Top-down parity not proven.** The safety property "top-down is bit-identical to upstream" is
+   argued — the renderer only reads ECS state and the mode is off by default — but not demonstrated.
+   No parity harness exists.
+4. **Toggle-stress and leak behaviour untested.** The render target is only reallocated on size
+   change and disposed in `Dispose`, so it should be fine. Unverified.
+5. **A shutdown assert was seen once** — `EntityLookupSystem.RemoveChildrenFromTerminatingBroadphase`
+   hitting `DebugTools.Assert` during map teardown. No first-person frames in the stack, and it is
+   debug-build-only. Did not recur. Cause unknown.
+
+---
+
+## 6. Next steps, in order
+
+1. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
+   motion parallax — the single biggest thing making the view feel static while walking. The
+   floor-plane projection in `EntityPass.DrawFlats` is a working prototype of the maths needed.
+2. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
+   machines and lockers currently render waist-high.
+3. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
+   mobs bleed through wall edges. `DrawEntity` does not expose the clipping needed to fix it properly.
+4. Measure a frame time, then work the §5 list.

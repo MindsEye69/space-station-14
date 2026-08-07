@@ -38,6 +38,7 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
     [Dependency] private IConfigurationManager _cfg = default!;
     [Dependency] private IResourceCache _resCache = default!;
     [Dependency] private IInputManager _inputMan = default!;
+    [Dependency] private ISurfacePalette _palette = default!;
 
     private IRenderTexture? _target;
     private Vector2i _targetSize;
@@ -125,7 +126,7 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
         Camera.Height = _cfg.GetCVar(FirstPersonCVars.EyeHeight);
         Camera.ClampPitch(size.Y);
 
-        _renderer ??= new FirstPersonRenderer(_entMan);
+        _renderer ??= new FirstPersonRenderer(_entMan, _palette);
         _wallTexture ??= ResolveWallTexture();
 
         // Stashed in fields so the render callback can stay a cached delegate. A lambda capturing

@@ -23,18 +23,17 @@ public sealed class WallPass
     /// <summary>Base wall colour, roughly the station's steel plating.</summary>
     private static readonly Color WallBase = Color.FromHex("#9aa0ad");
 
-    /// <summary>Warmer than the walls, so furniture reads as furniture at a glance.</summary>
+    /// <summary>
+    /// Fallback side colour, for waist-height tiles <see cref="ISurfacePalette"/> could not sample.
+    /// Warmer than the walls, so furniture still reads as furniture at a glance.
+    /// </summary>
     private static readonly Color HalfBase = Color.FromHex("#9b8467");
 
     /// <summary>
-    /// The top surface of a counter. Lighter than the side, standing in for the fact that a
-    /// horizontal face catches more light than a vertical one.
+    /// Fallback top colour. Lighter than <see cref="HalfBase"/>, standing in for a horizontal face
+    /// catching more light than a vertical one — the relationship a sampled tint gets for free,
+    /// since sprite artists shade a rim away from the light.
     /// </summary>
-    /// <remarks>
-    /// A flat tint on purpose, for now. This is the one face SS14 genuinely has art for — the
-    /// top-down sprite is a picture of it taken from exactly this angle — so it is where a derived
-    /// per-entity colour, and eventually the sprite itself, belongs.
-    /// </remarks>
     private static readonly Color HalfTop = Color.FromHex("#b39a7c");
 
     /// <summary>Half-height hits kept per column. Beyond this, further ones are dropped.</summary>
@@ -118,12 +117,15 @@ public sealed class WallPass
 
             for (var i = halfCount - 1; i >= 0; i--)
             {
-                AppendColumn(x, horizon, height, camera.Height, _halfHits[i], HalfHeight, HalfBase);
+                var hit = _halfHits[i];
+                var tint = _solidity.GetSurface(grid, hit.Tile).Tint;
+
+                AppendColumn(x, horizon, height, camera.Height, hit, HalfHeight, tint?.Side ?? HalfBase);
             }
         }
 
         if (DrawHalfHeight)
-            AppendCaps(camera, width, height, horizon);
+            AppendCaps(camera, grid, width, height, horizon);
 
         if (_vertCount > 0)
             handle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, wallTexture, _verts.AsSpan(0, _vertCount));
@@ -201,7 +203,8 @@ public sealed class WallPass
             if (dist > maxRange)
                 return halfCount;
 
-            var solidity = _solidity.GetSolidity(grid, new Vector2i(mapX, mapY));
+            var tile = new Vector2i(mapX, mapY);
+            var solidity = _solidity.GetSolidity(grid, tile);
 
             if (solidity == TileSolidity.None || (solidity == TileSolidity.Half && !recordHalf))
                 continue;
@@ -214,7 +217,7 @@ public sealed class WallPass
                 : origin.X + perpDist * rayDir.X;
             wallX -= MathF.Floor(wallX);
 
-            var hit = new Hit(perpDist, wallX, side);
+            var hit = new Hit(perpDist, wallX, side, tile);
 
             if (solidity == TileSolidity.Full)
             {
@@ -227,7 +230,7 @@ public sealed class WallPass
             // The tile is noted before the per-column cap is applied. Dropping the fifth hit in a
             // column only costs that column a face, but dropping its tile would punch a hole in a
             // surface every other column can see.
-            _capTiles.Add(new Vector2i(mapX, mapY));
+            _capTiles.Add(tile);
 
             if (halfCount < _halfHits.Length)
                 _halfHits[halfCount++] = hit;
@@ -307,7 +310,12 @@ public sealed class WallPass
     /// <c>firstperson.half_height</c> and you are looking at the underside: caps and faces begin to
     /// overlap, and the painter's algorithm here stops being sufficient.
     /// </remarks>
-    private void AppendCaps(FirstPersonCamera camera, int width, int height, float horizon)
+    private void AppendCaps(
+        FirstPersonCamera camera,
+        Entity<MapGridComponent> grid,
+        int width,
+        int height,
+        float horizon)
     {
         if (_capTiles.Count == 0)
             return;
@@ -353,11 +361,12 @@ public sealed class WallPass
                 break;
 
             var shade = Math.Max(1f / (1f + cap.Distance * 0.04f), 0.45f);
+            var top = _solidity.GetSurface(grid, t).Tint?.Top ?? HalfTop;
 
             var color = Color.FromSrgb(new Color(
-                HalfTop.R * shade,
-                HalfTop.G * shade,
-                HalfTop.B * shade,
+                top.R * shade,
+                top.G * shade,
+                top.B * shade,
                 1f));
 
             AppendVert(a, color);
@@ -380,7 +389,7 @@ public sealed class WallPass
             _verts = new DrawVertexUV2DColor[needed];
     }
 
-    private readonly record struct Hit(float Distance, float WallX, int Side)
+    private readonly record struct Hit(float Distance, float WallX, int Side, Vector2i Tile)
     {
         public bool Valid => Distance > 0f;
     }

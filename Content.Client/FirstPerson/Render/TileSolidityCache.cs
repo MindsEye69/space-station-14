@@ -63,14 +63,16 @@ public sealed class TileSolidityCache
     private static readonly Transform Identity = new(Vector2.Zero, 0f);
 
     private readonly SharedMapSystem _mapSystem;
+    private readonly ISurfacePalette _palette;
     private readonly EntityQuery<FixturesComponent> _fixtureQuery;
     private readonly EntityQuery<SpriteComponent> _spriteQuery;
 
-    private readonly Dictionary<Vector2i, TileSolidity> _cache = new();
+    private readonly Dictionary<Vector2i, TileSurface> _cache = new();
 
-    public TileSolidityCache(IEntityManager entMan)
+    public TileSolidityCache(IEntityManager entMan, ISurfacePalette palette)
     {
         _mapSystem = entMan.System<SharedMapSystem>();
+        _palette = palette;
         _fixtureQuery = entMan.GetEntityQuery<FixturesComponent>();
         _spriteQuery = entMan.GetEntityQuery<SpriteComponent>();
     }
@@ -113,10 +115,20 @@ public sealed class TileSolidityCache
 
     public TileSolidity GetSolidity(Entity<MapGridComponent> grid, Vector2i tile)
     {
+        return GetSurface(grid, tile).Solidity;
+    }
+
+    /// <summary>
+    /// A tile's height class and, when one could be derived from the entity that supplies it, the
+    /// colour of its material.
+    /// </summary>
+    public TileSurface GetSurface(Entity<MapGridComponent> grid, Vector2i tile)
+    {
         if (_cache.TryGetValue(tile, out var cached))
             return cached;
 
         var solidity = TileSolidity.None;
+        SurfaceTint? tint = null;
         var anchored = _mapSystem.GetAnchoredEntitiesEnumerator(grid.Owner, grid.Comp, tile);
 
         while (anchored.MoveNext(out var uid))
@@ -130,6 +142,8 @@ public sealed class TileSolidityCache
 
             if (!_fixtureQuery.TryGetComponent(uid.Value, out var fixtures))
                 continue;
+
+            var before = solidity;
 
             foreach (var fixture in fixtures.Fixtures.Values)
             {
@@ -146,12 +160,27 @@ public sealed class TileSolidityCache
                     solidity = TileSolidity.Half;
             }
 
+            // Take the colour from whichever entity actually raised the tile's height class, so a
+            // tile holding both a table and something shorter is painted as the table.
+            if (solidity != before && _palette.TryGetTint(sprite, out var found))
+                tint = found;
+
             // Nothing taller than this exists, so no need to keep looking.
             if (solidity == TileSolidity.Full)
                 break;
         }
 
-        _cache[tile] = solidity;
-        return solidity;
+        var surface = new TileSurface(solidity, tint);
+        _cache[tile] = surface;
+        return surface;
     }
 }
+
+/// <summary>
+/// What a tile is, vertically, and what it is made of.
+/// </summary>
+/// <param name="Tint">
+/// Null when no colour could be derived — the entity's art was outside the sampled paths, or the
+/// tile's height comes from something with no sprite at all. Callers fall back to a flat default.
+/// </param>
+public readonly record struct TileSurface(TileSolidity Solidity, SurfaceTint? Tint);

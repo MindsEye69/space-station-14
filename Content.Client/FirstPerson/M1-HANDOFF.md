@@ -34,7 +34,8 @@ camera is converted into that frame once per frame in `FirstPersonRenderer`.
 | `Render/WallPass.cs` | Per-column DDA. Full-height columns, waist-height ones and their top caps; `Depth[]` output. |
 | `Render/FloorPass.cs` | Flat floor/ceiling bands. **Still a placeholder.** |
 | `Render/EntityPass.cs` | Billboards, plus floor-plane projection for flat structures. |
-| `Render/TileSolidityCache.cs` | Per-tile height class, cached per frame. |
+| `Render/TileSolidityCache.cs` | Per-tile height class and material colour, cached per frame. |
+| `Render/SurfacePalette.cs` | Per-material top and side colours, sampled from sprites at RSI load. |
 
 ### Modified elsewhere — wiring only
 
@@ -151,7 +152,27 @@ Each of these was a bug first. They are recorded because the wrong version looke
     merged depth sort. **This holds only while the eye is above the surface** — put
     `firstperson.eye_height` below `firstperson.half_height` and the two begin to overlap.
 
-13. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
+13. **One sprite answers two questions, and measuring is the only way to tell them apart.** The top
+    tint is the *dominant* colour, the side tint is the mean of an *edge ring* just inside the opaque
+    bounding box. The carpet table settles why they cannot be one number: its sprite is a wooden
+    table under a green carpet, dominant `#006600`, rim `#4F2E18`. Both are right. A plain average
+    gives `#30460F`, a colour present nowhere on the object.
+    Three things were got wrong first, each fixed only because it was measured over all 433
+    geometry-producing structure RSIs rather than the ten tables originally eyeballed:
+    - *Dominant over every pixel lands on sprite linework.* SS14 art carries heavy near-black
+      outlines and shading; on 13% of structures that won the bucket outright, so a bookshelf came
+      out `#1C0B08` when it is plainly brown wood. Excluding pixels below luminance 30 takes it to
+      **0%**. Restricting to the sprite's interior instead only reached 7% — the dark is spread
+      through the shading, not confined to the border.
+    - *"The rim is naturally darker than the top" is false.* It held on 10 of 10 tables, which is
+      why it got written down as a discovered property; across all 433 it holds **41%**. The side is
+      now forced below the top instead. That relationship is imposed, not found.
+    - *The first sprite layer with an RSI is often not the object.* Airlocks and machines carry
+      `_unlit` and `panel_closing` overlays that are a few pixels over a transparent field. The
+      lookup picks the layer with the most opaque pixels, which is the object rather than the glow
+      laid over it.
+
+14. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
     `height / depth`, so a corner just in front of the camera lands hundreds of pixels below the
     horizon while the tile's far corners sit normally — the quad becomes a long diagonal wedge that
     sweeps across the view as you walk. Clamping was tried and reverted. Losing the tile underfoot is
@@ -313,11 +334,12 @@ before driving the client.
 The surface work follows the rule in §3. Milestones 1 and 2 — top caps, and the height sweep that
 set `half_height` to 0.32 — are **done**; what follows continues from there.
 
-1. **Palette extraction.** Sample each entity's RSI frame to a representative colour, cached per RSI
-   state, feeding both the cap tint and the side tint. Build dominant-colour *and* edge-ring
-   sampling and compare them against real furniture rather than reasoning about it — edge pixels sit
-   nearest to where the real side would be, but patterned tops (a cloth on a table) are the case
-   that decides it. Unblocks 2 and 4.
+1. **Decide whether material accuracy is worth the legibility it costs.** `SurfacePalette` works and
+   furniture is now per-material — but the flat brown it replaced was doing a job. It made furniture
+   pop against grey walls at a glance, and a correctly-grey metal counter against a grey wall does
+   not. This is a design call, not a bug, and everything below assumes an answer. Options: accept
+   it; enforce a minimum contrast against the wall colour; sample the walls too so the whole scene is
+   material-driven rather than half-and-half; or keep accurate hues but push saturation.
 2. **Painted side profiles.** A small authored library — table, counter, crate, machine, plinth —
    with fake depth in the paint, selected per entity and tinted from 1. Note this does **not** run
    into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored profile is

@@ -25,12 +25,12 @@ public sealed class FirstPersonRenderer
 
     private readonly FirstPersonCamera _gridCamera = new();
 
-    public FirstPersonRenderer(IEntityManager entMan)
+    public FirstPersonRenderer(IEntityManager entMan, ISurfacePalette palette)
     {
         _entMan = entMan;
         _xform = entMan.System<SharedTransformSystem>();
 
-        _solidity = new TileSolidityCache(entMan);
+        _solidity = new TileSolidityCache(entMan, palette);
         _wallPass = new WallPass(_solidity);
         _floorPass = new FloorPass();
         _entityPass = new EntityPass(entMan, entMan.System<EntityLookupSystem>(), _xform);

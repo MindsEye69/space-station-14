@@ -6,6 +6,7 @@ using Content.Client.Clickable;
 using Content.Client.DebugMon;
 using Content.Client.Eui;
 using Content.Client.FeedbackPopup;
+using Content.Client.FirstPerson.Render;
 using Content.Client.Fullscreen;
 using Content.Client.GameTicking.Managers;
 using Content.Client.GhostKick;
@@ -46,6 +47,9 @@ namespace Content.Client.IoC
             collection.Register<IScreenshotHook, ScreenshotHook>();
             collection.Register<FullscreenHook, FullscreenHook>();
             collection.Register<IClickMapManager, ClickMapManager>();
+            // Registered here rather than built by the renderer because it has to be listening
+            // before the RSIs load — that event is the only point their pixels exist on the CPU.
+            collection.Register<ISurfacePalette, SurfacePalette>();
             collection.Register<IClientAdminManager, ClientAdminManager>();
             collection.Register<ISharedAdminManager, ClientAdminManager>();
             collection.Register<EuiManager, EuiManager>();

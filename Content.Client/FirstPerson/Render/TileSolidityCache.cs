@@ -4,6 +4,7 @@ using Robust.Client.GameObjects;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics;
+using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Dynamics;
 
 namespace Content.Client.FirstPerson.Render;
@@ -66,6 +67,7 @@ public sealed class TileSolidityCache
     private readonly ISurfacePalette _palette;
     private readonly EntityQuery<FixturesComponent> _fixtureQuery;
     private readonly EntityQuery<SpriteComponent> _spriteQuery;
+    private readonly EntityQuery<PhysicsComponent> _physicsQuery;
 
     private readonly Dictionary<Vector2i, TileSurface> _cache = new();
 
@@ -75,6 +77,24 @@ public sealed class TileSolidityCache
         _palette = palette;
         _fixtureQuery = entMan.GetEntityQuery<FixturesComponent>();
         _spriteQuery = entMan.GetEntityQuery<SpriteComponent>();
+        _physicsQuery = entMan.GetEntityQuery<PhysicsComponent>();
+    }
+
+    /// <summary>
+    /// Whether an entity's physics actually stops anything.
+    /// </summary>
+    /// <remarks>
+    /// A hard fixture is not enough on its own. Open curtains, cargo pallets, cargo telepads and
+    /// security barriers all keep full-tile hard fixtures on real collision layers and simply switch
+    /// the body off with <c>canCollide: false</c> — so the fixture says "wall" while the entity stops
+    /// nothing, and the view grew waist-high slabs you walk straight through.
+    ///
+    /// This is the same mistake as testing a collision layer without looking at the fixture's shape:
+    /// the renderer has to ask what actually blocks a mob, not read a proxy for it.
+    /// </remarks>
+    private bool Collides(EntityUid uid)
+    {
+        return _physicsQuery.TryGetComponent(uid, out var physics) && physics.CanCollide;
     }
 
     public void Clear()
@@ -138,6 +158,9 @@ public sealed class TileSolidityCache
             // rather than removing them — so a purely physics-based test turns every plated floor
             // into a thicket of geometry.
             if (!_spriteQuery.TryGetComponent(uid.Value, out var sprite) || !sprite.Visible)
+                continue;
+
+            if (!Collides(uid.Value))
                 continue;
 
             if (!_fixtureQuery.TryGetComponent(uid.Value, out var fixtures))

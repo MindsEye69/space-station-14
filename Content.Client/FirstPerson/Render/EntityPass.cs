@@ -5,6 +5,7 @@ using Robust.Client.Graphics;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics;
+using Robust.Shared.Physics.Components;
 
 namespace Content.Client.FirstPerson.Render;
 
@@ -47,12 +48,14 @@ public sealed class EntityPass
     private int _vertCount;
 
     private EntityQuery<FixturesComponent> _fixtureQuery;
+    private EntityQuery<PhysicsComponent> _physicsQuery;
 
     public EntityPass(IEntityManager entMan, EntityLookupSystem lookup, SharedTransformSystem xform)
     {
         _lookup = lookup;
         _xform = xform;
         _fixtureQuery = entMan.GetEntityQuery<FixturesComponent>();
+        _physicsQuery = entMan.GetEntityQuery<PhysicsComponent>();
     }
 
     /// <summary>
@@ -70,6 +73,11 @@ public sealed class EntityPass
     /// </remarks>
     private bool IsWallGeometry(EntityUid uid)
     {
+        // Must match TileSolidityCache.Collides. An entity with hard fixtures but a switched-off
+        // body is not geometry, so it has to reach the billboard pass instead of being swallowed.
+        if (!_physicsQuery.TryGetComponent(uid, out var physics) || !physics.CanCollide)
+            return false;
+
         if (!_fixtureQuery.TryGetComponent(uid, out var fixtures))
             return false;
 

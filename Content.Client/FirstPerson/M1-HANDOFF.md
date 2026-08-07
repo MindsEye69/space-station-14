@@ -184,7 +184,18 @@ Each of these was a bug first. They are recorded because the wrong version looke
     luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
     art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
     brightness the hand-tuned constant had, with the colour now coming from the material.
-15. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
+15. **A hard fixture on a switched-off body blocks nothing.** Open curtains, cargo pallets, cargo
+    telepads and security barriers all keep full-tile hard fixtures on real collision layers and then
+    set `canCollide: false` on the body. Reading the fixture alone saw a wall where the entity stops
+    nothing, and the view grew grey waist-high slabs you walk straight through until you reach a real
+    wall. Both passes now test `PhysicsComponent.CanCollide` first, and must keep doing so together —
+    dropping it from one alone would delete those entities from both passes rather than letting them
+    fall through to billboards.
+    This is the third variant of one mistake, after the collision-layer test that ignored fixture
+    shape: **the renderer must ask what actually blocks a mob, never a proxy for it.** If a fourth
+    turns up, suspect the proxy before suspecting the geometry.
+
+16. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
     green *sides* looks like a bug and is not one. `TableCarpet` is a single-layer sprite, so there
     are no layers to separate; what changes is the smoothing state. `full.png` — a table standing
     alone — has rim `#4F2E18`, the wooden frame. `state_0` through `state_7`, the pieces used once
@@ -362,7 +373,7 @@ set `half_height` to 0.32 — are **done**; what follows continues from there.
    with fake depth in the paint, selected per entity and tinted by `SurfacePalette`. Note this does
    **not** run into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored
    profile is a standalone PNG loaded as its own texture. Real textures are available here.
-   The tints are in reasonable shape as they stand — see decision 15 before "fixing" a surface whose
+   The tints are in reasonable shape as they stand — see decision 16 before "fixing" a surface whose
    colour looks wrong, because the art may simply say that.
 2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. Independent

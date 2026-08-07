@@ -97,6 +97,27 @@ internal sealed class SurfacePalette : ISurfacePalette, IPostInjectInit
     /// <summary>Ceiling on a side's brightness as a fraction of its top's.</summary>
     private const float SideRelativeLuminance = 0.75f;
 
+    /// <summary>
+    /// Luminance a sampled colour is pulled towards, and how hard.
+    /// </summary>
+    /// <remarks>
+    /// SS14's art is drawn to be lit. Sprites are authored dark on the assumption that the lighting
+    /// system will raise them, and the raycaster has no lighting at all — so a raw material colour
+    /// renders as an unlit one. This is not a small effect: the standard steel wall's dominant is
+    /// <c>#454545</c>, luminance 69, against the <c>#9AA0AD</c> at luminance 160 that was hand-picked
+    /// to look right in this view. The art is 2.3x darker than the constant it replaced, which is
+    /// exactly why sampling walls made the station dimmer instead of richer.
+    ///
+    /// Gain is <c>(Reference / L) ^ Strength</c> rather than a straight normalisation. At strength 1
+    /// every material would land on the same luminance and only hue would tell marble from slate; at
+    /// 0 the scene stays as dark as the unlit art. Partial keeps the ordering — dark things stay
+    /// darker — while lifting everything into a range that reads without lighting.
+    /// </remarks>
+    private const float ReferenceLuminance = 190f;
+
+    /// <inheritdoc cref="ReferenceLuminance"/>
+    private const float NormalisationStrength = 0.7f;
+
     [Dependency] private readonly IResourceCache _resourceCache = default!;
 
     private readonly Dictionary<RSI, Dictionary<RSI.StateId, SurfaceTint>> _tints = new();
@@ -265,16 +286,16 @@ internal sealed class SurfacePalette : ISurfacePalette, IPostInjectInit
             if (edgeN == 0)
                 return false;
 
-            var flat = new Color((byte) (edgeR / edgeN), (byte) (edgeG / edgeN), (byte) (edgeB / edgeN));
+            var flat = Normalise(new Color((byte) (edgeR / edgeN), (byte) (edgeG / edgeN), (byte) (edgeB / edgeN)));
             tint = new SurfaceTint(flat, Darken(flat, SideRelativeLuminance)) { Coverage = opaque };
             return true;
         }
 
-        var top = new Color((byte) (domR / domN), (byte) (domG / domN), (byte) (domB / domN));
+        var top = Normalise(new Color((byte) (domR / domN), (byte) (domG / domN), (byte) (domB / domN)));
 
         // A sprite thinner than twice the ring depth has no interior, so the rim is the whole thing.
         var side = edgeN > 0
-            ? new Color((byte) (edgeR / edgeN), (byte) (edgeG / edgeN), (byte) (edgeB / edgeN))
+            ? Normalise(new Color((byte) (edgeR / edgeN), (byte) (edgeG / edgeN), (byte) (edgeB / edgeN)))
             : top;
 
         // Keep the rim's hue, which carries the material, but not its brightness if it would leave a
@@ -287,6 +308,30 @@ internal sealed class SurfacePalette : ISurfacePalette, IPostInjectInit
 
         tint = new SurfaceTint(top, side) { Coverage = opaque };
         return true;
+    }
+
+    /// <summary>
+    /// Lifts an unlit sprite colour into a range that reads without lighting, keeping its hue.
+    /// </summary>
+    /// <remarks>See <see cref="ReferenceLuminance"/> for why this is needed at all.</remarks>
+    private static Color Normalise(Color color)
+    {
+        var luminance = Luminance(color);
+        if (luminance < 1f)
+            return color;
+
+        var gain = MathF.Pow(ReferenceLuminance / luminance, NormalisationStrength);
+
+        // Scale back rather than clip. Clipping a single channel at 255 shifts the hue, so a warm
+        // near-white would drift towards cyan as its red saturated first.
+        var brightest = Math.Max(color.RByte, Math.Max(color.GByte, color.BByte));
+        if (brightest * gain > 255f)
+            gain = 255f / brightest;
+
+        return new Color(
+            (byte) (color.RByte * gain),
+            (byte) (color.GByte * gain),
+            (byte) (color.BByte * gain));
     }
 
     private static Color Darken(Color color, float factor)

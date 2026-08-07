@@ -172,6 +172,22 @@ Each of these was a bug first. They are recorded because the wrong version looke
       lookup picks the layer with the most opaque pixels, which is the object rather than the glow
       laid over it.
 
+14. **SS14's art is drawn to be lit, and this renderer has no lighting.** Sprites are authored dark
+    on the assumption the lighting system will raise them, so a raw material colour renders as an
+    *unlit* one. The effect is large enough to have looked like a bug: sampling walls made the
+    station darker rather than richer, because the standard steel wall's dominant is `#454545`
+    (luminance 69) against the `#9AA0AD` (luminance 160) hand-picked to look right here. The art is
+    2.3x darker than the constant it replaced. The flat colours were never standing in for
+    *material* — they were standing in for *light*.
+    `SurfacePalette.Normalise` lifts a sampled colour toward a reference luminance, keeping hue, with
+    gain `(Reference / L) ^ Strength`. Partial on purpose: at strength 1 every material lands on one
+    luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
+    art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
+    brightness the hand-tuned constant had, with the colour now coming from the material.
+    Known limitation: a sprite's layers are not separated, so a carpeted table takes both its top
+    and its side from whichever layer covers more. The side ought to come from the base layer and
+    the top from the layer above it.
+
 14. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
     `height / depth`, so a corner just in front of the camera lands hundreds of pixels below the
     horizon while the tile's far corners sit normally — the quad becomes a long diagonal wedge that
@@ -334,12 +350,11 @@ before driving the client.
 The surface work follows the rule in §3. Milestones 1 and 2 — top caps, and the height sweep that
 set `half_height` to 0.32 — are **done**; what follows continues from there.
 
-1. **Decide whether material accuracy is worth the legibility it costs.** `SurfacePalette` works and
-   furniture is now per-material — but the flat brown it replaced was doing a job. It made furniture
-   pop against grey walls at a glance, and a correctly-grey metal counter against a grey wall does
-   not. This is a design call, not a bug, and everything below assumes an answer. Options: accept
-   it; enforce a minimum contrast against the wall colour; sample the walls too so the whole scene is
-   material-driven rather than half-and-half; or keep accurate hues but push saturation.
+1. **Separate a sprite's layers.** The side should come from the base layer and the top from the
+   layer covering it, so a carpeted table gets a green top over wooden sides. Today both come from
+   whichever layer has the most opaque pixels — see the limitation on decision 14. This is the last
+   obviously-wrong thing about the tints, and it is the same carpet-table case that shaped the whole
+   design.
 2. **Painted side profiles.** A small authored library — table, counter, crate, machine, plinth —
    with fake depth in the paint, selected per entity and tinted from 1. Note this does **not** run
    into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored profile is

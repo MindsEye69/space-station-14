@@ -20,7 +20,10 @@ namespace Content.Client.FirstPerson.Render;
 /// </remarks>
 public sealed class WallPass
 {
-    /// <summary>Base wall colour, roughly the station's steel plating.</summary>
+    /// <summary>
+    /// Fallback wall colour, roughly the station's steel plating, for tiles
+    /// <see cref="ISurfacePalette"/> could not sample.
+    /// </summary>
     private static readonly Color WallBase = Color.FromHex("#9aa0ad");
 
     /// <summary>
@@ -112,7 +115,15 @@ public sealed class WallPass
             if (full.Valid)
             {
                 Depth[x] = full.Distance;
-                AppendColumn(x, horizon, height, camera.Height, full, 1f, WallBase);
+
+                // Walls take the *top* tint, not the side, even though the face drawn is vertical.
+                // The darkened side exists to separate a counter's rising face from the horizontal
+                // top above it; a full-height wall rises past the eye, so it has no visible top to
+                // be told apart from and nothing to darken against. Using the side here would just
+                // make every wall in the station dimmer than its material really is.
+                var wall = _solidity.GetSurface(grid, full.Tile).Tint;
+
+                AppendColumn(x, horizon, height, camera.Height, full, 1f, wall?.Top ?? WallBase);
             }
 
             for (var i = halfCount - 1; i >= 0; i--)

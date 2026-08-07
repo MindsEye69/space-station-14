@@ -11,6 +11,15 @@ namespace Content.Client.FirstPerson.Camera;
 /// </remarks>
 public sealed class FirstPersonCamera
 {
+    /// <summary>
+    /// Closest a projected point may be before it is discarded, in tiles.
+    /// </summary>
+    /// <remarks>
+    /// Half a tile rather than a hair off zero: everything here scales as 1/depth, so anything nearer
+    /// explodes to hundreds of times its size and swallows the screen.
+    /// </remarks>
+    public const float NearPlane = 0.5f;
+
     public Vector2 Position;
     public Angle Yaw;
     public float PitchPixels;
@@ -60,6 +69,43 @@ public sealed class FirstPersonCamera
         return new Vector2(
             invDet * (dir.Y * rel.X - dir.X * rel.Y),
             invDet * (-plane.Y * rel.X + plane.X * rel.Y));
+    }
+
+    /// <summary>
+    /// Projects a point lying on a horizontal plane <paramref name="surfaceHeight"/> tiles above the
+    /// floor into screen space. False if the point is nearer than <see cref="NearPlane"/>.
+    /// </summary>
+    /// <remarks>
+    /// One routine covers the floor (height 0) and the top of a counter (height
+    /// <c>firstperson.half_height</c>), because they differ only in how far below the eye the plane
+    /// sits.
+    ///
+    /// Returning false so the caller discards the whole quad is deliberate, and clamping the depth
+    /// instead is a trap that was tried and reverted. Screen Y goes as <c>height / depth</c>, so a
+    /// corner just in front of the camera lands hundreds of pixels below the horizon while the far
+    /// corners sit at ordinary positions — the quad becomes a long diagonal wedge sweeping across the
+    /// view as you walk. Losing the tile underfoot, which is mostly out of frame anyway, is much
+    /// cheaper than that.
+    /// </remarks>
+    public bool ProjectSurface(
+        Vector2 gridPos,
+        int width,
+        int height,
+        float horizon,
+        float surfaceHeight,
+        out Vector2 screen)
+    {
+        screen = default;
+
+        var cam = WorldToCamera(gridPos);
+        if (cam.Y <= NearPlane)
+            return false;
+
+        screen = new Vector2(
+            width / 2f * (1f + cam.X / cam.Y),
+            horizon + height / cam.Y * (Height - surfaceHeight));
+
+        return true;
     }
 
     public void ClampPitch(float viewHeight)

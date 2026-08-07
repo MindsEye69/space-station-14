@@ -20,9 +20,6 @@ public sealed class EntityPass
 {
     private const float PixelsPerMeter = 32f;
 
-    /// <summary>Closest an entity may be before it is skipped, in tiles.</summary>
-    private const float NearPlane = 0.5f;
-
     /// <summary>
     /// At or below this draw depth an entity lies flat on the floor plane rather than standing up.
     /// </summary>
@@ -159,10 +156,8 @@ public sealed class EntityPass
             var gridPos = Vector2.Transform(worldPos, invGrid);
             var cam = camera.WorldToCamera(gridPos);
 
-            // Behind or effectively on top of the camera. The near plane is half a tile rather than
-            // a hair off zero: scale goes as 1/depth, so anything closer explodes to hundreds of
-            // times its size and swallows the screen.
-            if (cam.Y <= NearPlane)
+            // Behind or effectively on top of the camera.
+            if (cam.Y <= FirstPersonCamera.NearPlane)
                 continue;
 
             var screenX = width / 2f * (1f + cam.X / cam.Y);
@@ -246,10 +241,12 @@ public sealed class EntityPass
         {
             var t = flat.Tile;
 
-            if (!ProjectFloor(camera, new Vector2(t.X, t.Y), width, height, horizon, out var a) ||
-                !ProjectFloor(camera, new Vector2(t.X + 1, t.Y), width, height, horizon, out var b) ||
-                !ProjectFloor(camera, new Vector2(t.X + 1, t.Y + 1), width, height, horizon, out var c) ||
-                !ProjectFloor(camera, new Vector2(t.X, t.Y + 1), width, height, horizon, out var d))
+            const float floor = 0f;
+
+            if (!camera.ProjectSurface(new Vector2(t.X, t.Y), width, height, horizon, floor, out var a) ||
+                !camera.ProjectSurface(new Vector2(t.X + 1, t.Y), width, height, horizon, floor, out var b) ||
+                !camera.ProjectSurface(new Vector2(t.X + 1, t.Y + 1), width, height, horizon, floor, out var c) ||
+                !camera.ProjectSurface(new Vector2(t.X, t.Y + 1), width, height, horizon, floor, out var d))
             {
                 continue;
             }
@@ -288,38 +285,6 @@ public sealed class EntityPass
 
         if (_vertCount > 0)
             handle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, Texture.White, _flatVerts.AsSpan(0, _vertCount));
-    }
-
-    /// <summary>
-    /// Projects a point on the floor plane into screen space. False if it is nearer than the near
-    /// plane, which discards the whole tile.
-    /// </summary>
-    /// <remarks>
-    /// Discarding is deliberate, and clamping the depth instead is a trap that was tried and
-    /// reverted. Screen Y goes as <c>height / depth</c>, so a corner just in front of the camera
-    /// lands hundreds of pixels below the horizon while the tile's far corners sit at ordinary
-    /// positions — the quad becomes a long diagonal wedge sweeping across the view as you walk.
-    /// Losing the tile underfoot, which is mostly out of frame anyway, is much cheaper than that.
-    /// </remarks>
-    private static bool ProjectFloor(
-        FirstPersonCamera camera,
-        Vector2 gridPos,
-        int width,
-        int height,
-        float horizon,
-        out Vector2 screen)
-    {
-        screen = default;
-
-        var cam = camera.WorldToCamera(gridPos);
-        if (cam.Y <= NearPlane)
-            return false;
-
-        screen = new Vector2(
-            width / 2f * (1f + cam.X / cam.Y),
-            horizon + height / cam.Y * camera.Height);
-
-        return true;
     }
 
     private void AppendTriangle(Vector2 a, Vector2 b, Vector2 c, Color color)

@@ -57,11 +57,24 @@ public sealed class FirstPersonCVars
         CVarDef.Create("firstperson.draw_half_height", true, CVar.CLIENTONLY);
 
     /// <summary>
-    /// Height of waist-height structures, in tiles. Slightly below <see cref="EyeHeight"/> so the
-    /// player looks down at counters rather than level with them.
+    /// Height of waist-height structures, in tiles. Must stay below <see cref="EyeHeight"/>.
     /// </summary>
+    /// <remarks>
+    /// The gap between this and the eye is the only thing that makes the top of a counter visible:
+    /// the cap covers <c>(eye - half) * viewHeight / distance</c> pixels, so at the old 0.5 it was a
+    /// 2px sliver at ordinary room range and a counter read as a featureless slab. At 0.32 the same
+    /// counter measures 10px of top against 60px of face, which is the difference between a box and
+    /// a table.
+    ///
+    /// 0.32 is also about physically right rather than merely legible. Taking the 0.55 eye as a
+    /// standing adult's 1.6m puts a tile at roughly 2.9m, which makes a real 0.9m counter 0.31.
+    ///
+    /// Going above <see cref="EyeHeight"/> is not merely odd-looking: you would be under the surface
+    /// rather than over it, and <c>WallPass.AppendCaps</c> depends on being above it to guarantee
+    /// caps and faces never overlap on screen.
+    /// </remarks>
     public static readonly CVarDef<float> HalfHeight =
-        CVarDef.Create("firstperson.half_height", 0.5f, CVar.CLIENTONLY | CVar.ARCHIVE);
+        CVarDef.Create("firstperson.half_height", 0.32f, CVar.CLIENTONLY | CVar.ARCHIVE);
 
     /// <summary>
     /// Whether WASD is interpreted relative to the camera (spec §7.3 option A) rather than the grid.

@@ -26,15 +26,29 @@ public sealed class WallPass
     /// <summary>Warmer than the walls, so furniture reads as furniture at a glance.</summary>
     private static readonly Color HalfBase = Color.FromHex("#9b8467");
 
+    /// <summary>
+    /// The top surface of a counter. Lighter than the side, standing in for the fact that a
+    /// horizontal face catches more light than a vertical one.
+    /// </summary>
+    /// <remarks>
+    /// A flat tint on purpose, for now. This is the one face SS14 genuinely has art for — the
+    /// top-down sprite is a picture of it taken from exactly this angle — so it is where a derived
+    /// per-entity colour, and eventually the sprite itself, belongs.
+    /// </remarks>
+    private static readonly Color HalfTop = Color.FromHex("#b39a7c");
+
     /// <summary>Half-height hits kept per column. Beyond this, further ones are dropped.</summary>
     private const int MaxHalfHits = 4;
+
+    /// <summary>Tiles capped per frame. Beyond this the most distant ones are dropped.</summary>
+    private const int MaxCapTiles = 256;
 
     /// <summary>
     /// Height of a waist-height structure, in tiles. Set from <c>firstperson.half_height</c>; kept
     /// below the eye height on purpose, so the player looks down at counters rather than level with
     /// them. <see cref="EntityPass"/> reads it to lift whatever is resting on top.
     /// </summary>
-    public float HalfHeight = 0.5f;
+    public float HalfHeight = 0.32f;
 
     /// <summary>Whether waist-height structures are drawn at all.</summary>
     public bool DrawHalfHeight = true;
@@ -52,6 +66,13 @@ public sealed class WallPass
     private int _vertCount;
 
     private readonly Hit[] _halfHits = new Hit[MaxHalfHits];
+
+    /// <summary>
+    /// Distinct waist-height tiles crossed this frame, gathered across every column so each is
+    /// capped once rather than once per column that saw it.
+    /// </summary>
+    private readonly HashSet<Vector2i> _capTiles = new();
+    private readonly List<Cap> _caps = new();
 
     public WallPass(TileSolidityCache solidity)
     {
@@ -74,8 +95,9 @@ public sealed class WallPass
         // one shared sprite atlas, and routing that atlas through this batch corrupted top-down
         // rendering. Appearance comes from per-vertex colour instead.
 
-        EnsureVertCapacity(width * 6 * (MaxHalfHits + 1));
+        EnsureVertCapacity(width * 6 * (MaxHalfHits + 1) + MaxCapTiles * 6);
         _vertCount = 0;
+        _capTiles.Clear();
 
         var horizon = height / 2f + camera.PitchPixels;
 
@@ -99,6 +121,9 @@ public sealed class WallPass
                 AppendColumn(x, horizon, height, camera.Height, _halfHits[i], HalfHeight, HalfBase);
             }
         }
+
+        if (DrawHalfHeight)
+            AppendCaps(camera, width, height, horizon);
 
         if (_vertCount > 0)
             handle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, wallTexture, _verts.AsSpan(0, _vertCount));
@@ -198,6 +223,12 @@ public sealed class WallPass
             }
 
             // Waist height: record it and keep going, because the player can see over it.
+            //
+            // The tile is noted before the per-column cap is applied. Dropping the fifth hit in a
+            // column only costs that column a face, but dropping its tile would punch a hole in a
+            // surface every other column can see.
+            _capTiles.Add(new Vector2i(mapX, mapY));
+
             if (halfCount < _halfHits.Length)
                 _halfHits[halfCount++] = hit;
         }
@@ -256,6 +287,93 @@ public sealed class WallPass
         _verts[_vertCount++] = bl;
     }
 
+    /// <summary>
+    /// Lays a horizontal quad over the top of every waist-height tile crossed this frame.
+    /// </summary>
+    /// <remarks>
+    /// Without this a counter is a vertical face and nothing else — a short wall with no lid, which
+    /// is most of why furniture used to read as architecture.
+    ///
+    /// Caps are whole tiles rather than per-column strips, unlike the faces. Ordering makes that
+    /// safe. Everything projects as 1/depth, so a face at distance d covers
+    /// <c>[horizon + (H-h)/d, horizon + H/d]</c> and a cap covers <c>[horizon + (H-h)/d_far,
+    /// horizon + (H-h)/d_near]</c>: a tile's cap ends exactly where its own face begins, and any
+    /// farther cap sits entirely above any nearer face. No cap and no face ever overlap, so their
+    /// draw order is free. Caps are also coplanar with each other, so like floor tiles they project
+    /// disjointly and their mutual order is free too — which is what lets this be one flat batch
+    /// appended after the columns instead of a merged depth sort.
+    ///
+    /// That argument needs the eye to be above the surface. Set <c>firstperson.eye_height</c> below
+    /// <c>firstperson.half_height</c> and you are looking at the underside: caps and faces begin to
+    /// overlap, and the painter's algorithm here stops being sufficient.
+    /// </remarks>
+    private void AppendCaps(FirstPersonCamera camera, int width, int height, float horizon)
+    {
+        if (_capTiles.Count == 0)
+            return;
+
+        _caps.Clear();
+
+        foreach (var tile in _capTiles)
+        {
+            var centre = new Vector2(tile.X + 0.5f, tile.Y + 0.5f);
+            _caps.Add(new Cap(tile, camera.WorldToCamera(centre).Y));
+        }
+
+        // Nearest first. Order is free, so distance drives it purely for the vertex budget: when the
+        // buffer fills, the caps given up are the distant ones rather than whichever sorted last.
+        _caps.Sort(static (a, b) => a.Distance.CompareTo(b.Distance));
+
+        foreach (var cap in _caps)
+        {
+            var t = cap.Tile;
+
+            if (!camera.ProjectSurface(new Vector2(t.X, t.Y), width, height, horizon, HalfHeight, out var a) ||
+                !camera.ProjectSurface(new Vector2(t.X + 1, t.Y), width, height, horizon, HalfHeight, out var b) ||
+                !camera.ProjectSurface(new Vector2(t.X + 1, t.Y + 1), width, height, horizon, HalfHeight, out var c) ||
+                !camera.ProjectSurface(new Vector2(t.X, t.Y + 1), width, height, horizon, HalfHeight, out var d))
+            {
+                continue;
+            }
+
+            // Entirely off one side. Without this a tile beside the camera projects to an extreme
+            // screen X and smears a long wedge across the view.
+            if ((a.X < 0 && b.X < 0 && c.X < 0 && d.X < 0) ||
+                (a.X > width && b.X > width && c.X > width && d.X > width))
+            {
+                continue;
+            }
+
+            // Occlusion against full-height walls, sampled at the tile centre rather than per pixel.
+            var centreX = (int) ((a.X + c.X) / 2f);
+            if (centreX >= 0 && centreX < Depth.Length && Depth[centreX] < cap.Distance)
+                continue;
+
+            if (_vertCount + 6 > _verts.Length)
+                break;
+
+            var shade = Math.Max(1f / (1f + cap.Distance * 0.04f), 0.45f);
+
+            var color = Color.FromSrgb(new Color(
+                HalfTop.R * shade,
+                HalfTop.G * shade,
+                HalfTop.B * shade,
+                1f));
+
+            AppendVert(a, color);
+            AppendVert(b, color);
+            AppendVert(c, color);
+            AppendVert(a, color);
+            AppendVert(c, color);
+            AppendVert(d, color);
+        }
+    }
+
+    private void AppendVert(Vector2 position, Color color)
+    {
+        _verts[_vertCount++] = new DrawVertexUV2DColor(position, Vector2.Zero, color);
+    }
+
     private void EnsureVertCapacity(int needed)
     {
         if (_verts.Length < needed)
@@ -266,4 +384,7 @@ public sealed class WallPass
     {
         public bool Valid => Distance > 0f;
     }
+
+    /// <summary>A waist-height tile and the perpendicular distance to its centre.</summary>
+    private readonly record struct Cap(Vector2i Tile, float Distance);
 }

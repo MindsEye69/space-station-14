@@ -80,8 +80,15 @@ public sealed class EntityPass
 
         foreach (var fixture in fixtures.Fixtures.Values)
         {
-            if (fixture.Hard && (fixture.CollisionLayer & mask) != 0)
+            // CoversTileCentre must be applied here too, and identically. WallPass only rasterises
+            // tiles whose fixture covers the centre, so testing the layer alone would swallow every
+            // edge-flush railing and fence into a pass that never draws them.
+            if (fixture.Hard
+                && (fixture.CollisionLayer & mask) != 0
+                && TileSolidityCache.CoversTileCentre(fixture))
+            {
                 return true;
+            }
         }
 
         return false;

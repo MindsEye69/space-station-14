@@ -1,8 +1,10 @@
+using System.Numerics;
 using Content.Shared.Physics;
 using Robust.Client.GameObjects;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics;
+using Robust.Shared.Physics.Dynamics;
 
 namespace Content.Client.FirstPerson.Render;
 
@@ -52,6 +54,14 @@ public sealed class TileSolidityCache
     /// </remarks>
     public const CollisionGroup HalfMask = CollisionGroup.MidImpassable;
 
+    /// <summary>
+    /// The fixture transform used by <see cref="CoversTileCentre"/>. Anchored entities sit at the
+    /// centre of their tile and rotate about it in 90° steps, so fixture-local coordinates are
+    /// already tile-relative and the identity transform is the correct one — which is also why the
+    /// test needs no entity lookup and costs nothing.
+    /// </summary>
+    private static readonly Transform Identity = new(Vector2.Zero, 0f);
+
     private readonly SharedMapSystem _mapSystem;
     private readonly EntityQuery<FixturesComponent> _fixtureQuery;
     private readonly EntityQuery<SpriteComponent> _spriteQuery;
@@ -68,6 +78,37 @@ public sealed class TileSolidityCache
     public void Clear()
     {
         _cache.Clear();
+    }
+
+    /// <summary>
+    /// Whether a fixture stands in the middle of its tile rather than flush against one edge.
+    /// </summary>
+    /// <remarks>
+    /// Both passes treat a tile as all-or-nothing — <see cref="WallPass"/> fills the whole tile and
+    /// <see cref="EntityPass"/> drops whatever was filled — so a structure occupying a sliver of one
+    /// must not qualify. Railings, fences and windoors are waist-height by layer, but their fixture
+    /// is pushed hard against an edge: a railing is <c>-0.49,-0.49,0.49,-0.25</c>, a quarter of a
+    /// tile deep. Filling the tile drew a solid brown surface across three sides you can walk
+    /// straight through.
+    ///
+    /// Size cannot separate the two cases. A computer's fixture is half a tile across and a fence
+    /// spanning the full width of one is a fifth of a tile deep — both smaller than that railing,
+    /// and both genuinely impassable. What every edge-flush structure has in common is that it
+    /// leaves the middle of the tile clear, which is exactly what makes it walkable.
+    ///
+    /// Anything rejected here is not dropped: it fails <c>EntityPass.IsWallGeometry</c> by the same
+    /// test and is drawn as a billboard instead. The two must agree, or a railing is excluded from
+    /// both passes and becomes invisible.
+    /// </remarks>
+    public static bool CoversTileCentre(Fixture fixture)
+    {
+        for (var i = 0; i < fixture.Shape.ChildCount; i++)
+        {
+            if (fixture.Shape.ComputeAABB(Identity, i).Contains(Vector2.Zero))
+                return true;
+        }
+
+        return false;
     }
 
     public TileSolidity GetSolidity(Entity<MapGridComponent> grid, Vector2i tile)
@@ -92,7 +133,7 @@ public sealed class TileSolidityCache
 
             foreach (var fixture in fixtures.Fixtures.Values)
             {
-                if (!fixture.Hard)
+                if (!fixture.Hard || !CoversTileCentre(fixture))
                     continue;
 
                 if ((fixture.CollisionLayer & (int) FullMask) != 0)

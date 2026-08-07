@@ -9,7 +9,7 @@ Per spec §11: what this is, how it was verified, and — importantly — what w
 **Playable and played in a live session.** Walls, corridors, mouse-look, camera-relative movement,
 half-height furniture, floor-flat structures and world interaction have all been exercised against a
 running server. Performance, ghost/dead states, shuttles, rotated grids and top-down parity have
-**not** been checked — see §5. Two visual bugs are open — see §6.
+**not** been checked — see §5. One visual bug is open — see §6.
 
 ---
 
@@ -128,7 +128,20 @@ Each of these was a bug first. They are recorded because the wrong version looke
     player's own position — so the first step hit their shoes and *every click targeted those*. This
     is the same trap `EntityPass` already documents; it was walked into anyway.
 
-11. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
+11. **A collision layer says what a thing is; only its fixture shape says where it is.** Both passes
+    treat a tile as all-or-nothing, so a structure is only geometry if its fixture covers the tile
+    *centre*. Railings, fences, windoors, directional windows and edge firelocks are waist- or
+    full-height by layer, but their fixture is a sliver against one edge — a railing is
+    `-0.49,-0.49,0.49,-0.25`. Testing the layer alone filled the whole tile and drew a solid across
+    three sides you can walk straight through. Size cannot separate the cases: a computer's fixture
+    is half a tile across and a fence spanning the full width of one is a fifth of a tile deep, both
+    smaller than that railing and both genuinely impassable. Leaving the middle of the tile clear is
+    what edge-flush structures have in common, and it is also what makes them walkable. The test is
+    taken in fixture-local space with an identity transform — anchored entities sit at the tile
+    centre and rotate about it in 90° steps, so it needs no entity lookup and does not depend on
+    which way the structure faces.
+
+12. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
     `height / depth`, so a corner just in front of the camera lands hundreds of pixels below the
     horizon while the tile's far corners sit normally — the quad becomes a long diagonal wedge that
     sweeps across the view as you walk. Clamping was tried and reverted. Losing the tile underfoot is
@@ -157,6 +170,12 @@ Live session against a local server, playing as Captain:
   examine on cloth resting on a counter returned "cloth — A raw material", i.e. it targets the object
   rather than the floor beneath it. Left-click pickup at that range correctly did nothing, being
   outside hand reach — pickup at close range is still unconfirmed.
+- **Railings render as billboards, not as tile geometry.** Driven session, Dev map, `spawn Railing`
+  laid in a row: the tiles read as railing sprites with floor visible through the gaps between the
+  posts, where they were previously solid brown. Proved rather than eyeballed with the §6 bisect —
+  `cvar firstperson.draw_entities 0` made the railings vanish completely, which they could not do if
+  `WallPass` were still drawing them, and counters behind them stayed brown throughout. No
+  exceptions in the client log.
 - `dotnet build SpaceStation14.slnx` → 0 errors. `dotnet test Content.Tests` → 419 passed, 0 failed.
 - Client passes the IL sandbox verifier. Note it rejects `stackalloc` (`localloc`) — that was caught
   the hard way.
@@ -188,42 +207,77 @@ Live session against a local server, playing as Captain:
 
 ## 6. Open bugs
 
-1. **You can walk through the waist-high geometry.** Confirmed to be *this code's* half-height
-   surface — the brown `HalfBase` colour, drawn wherever `TileSolidityCache` reports
-   `TileSolidity.Half` from `MidImpassable`. So a solid is being drawn where nothing actually blocks
-   movement. Either the layer test is catching something that does not block mobs, or the tile is
-   being attributed geometry from a neighbouring entity. Start by logging which entity supplies the
-   `MidImpassable` fixture for the tile in front of the player.
-   Bisect with `cvar firstperson.draw_half_height 0`.
-
-2. **Red diagonal lines and dark quads appear over the view, shifting as you move.** Cause unknown.
+1. **Red diagonal lines and dark quads appear over the view, shifting as you move.** Cause unknown.
    Ruled out: the flat pass and the wall pass, whose colours are fixed greys and a warm brown, and
    the `GetWorldToScreenMatrix` stub, which only `MapTextOverlay` and `PopupOverlay` consume and
    which would misplace *text*, not draw lines. Never reproduced in a driven session.
    Bisect with `cvar firstperson.draw_entities 0` then `cvar firstperson.draw_half_height 0` — if it
    survives both, nothing this code draws is responsible and it is an overlay on top.
 
+### Fixed, with a caveat
+
+**Walking through waist-high geometry** was `TileSolidityCache` testing collision layers without
+looking at fixture shape — see decision 11. `CoversTileCentre` now gates both it and
+`EntityPass.IsWallGeometry`; the two must keep applying it identically, or an edge-flush structure
+falls out of both passes and becomes invisible.
+
+The caveat: those structures are now *billboards*, confirmed in a driven session. A railing is drawn
+as a camera-facing card of its top-down sprite rather than as a rail along the tile edge where it
+actually stands — close up you see the posts but the rail between them sits off-frame. That is
+honest about what blocks you, which the old behaviour was not, but it is not right yet. Drawing them
+properly means sub-tile edge geometry in `WallPass` — testing the ray against the fixture AABB for
+each tile it crosses, rather than treating tile entry as a hit.
+
+Every prototype whose rendering this changed, found by listing fixture bounds that exclude the
+origin: railings, edge-flush fences, `WindowDirectional`, windoors, `FirelockEdge` and barricade
+edges. Fence *corners* keep a second centre-covering fixture and stay solid, and ordinary
+full-tile firelocks were never affected.
+
 ### Method note
 
-Both remaining bugs resisted being solved by reading code. The shoes bug above was found in three
-cycles of driving the client directly — synthetic input via `keybd_event`/`mouse_event` plus a
-temporary sawmill log — after two confident wrong guesses from static reading. Reach for that loop
-earlier. Note `computer-use`'s `request_access` cannot see this client: it resolves against installed
-Start-menu apps and SS14 runs from source.
+These bugs resist being solved by reading *code*. The shoes bug above was found in three cycles of
+driving the client directly — synthetic input via `keybd_event`/`mouse_event` plus a temporary
+sawmill log — after two confident wrong guesses from static reading. Note `computer-use`'s
+`request_access` cannot see this client: it resolves against installed Start-menu apps and SS14 runs
+from source.
+
+**Send scancodes, not virtual keys.** This machine's layout is Norwegian (`00000414`), and
+`keybd_event` with a hardcoded US virtual key silently lands on the wrong physical key —
+`VK_OEM_3` mapped to scancode `0x27`, the `;` key, so every attempt to open the console typed a
+radio prefix into chat instead. GLFW resolves keys from the lParam scancode regardless of VK, so
+pass `KEYEVENTF_SCANCODE` with the US-position scancode (grave `0x29`, WASD `0x11/0x1E/0x1F/0x20`,
+J `0x24`, Enter `0x1C`) and the layout stops mattering. A scancode of 0 is just as broken: GLFW maps
+it to `GLFW_KEY_UNKNOWN` and the client drops the key. Typing *text* is the exception — derive those
+keys from `VkKeyScan`, which is layout-correct by construction.
+
+Useful setup for a driven session: `loginlocal = true` in `server_config.toml` means the local
+player is full admin on join, so `spawn <prototype>` puts the exact case under test at your feet
+rather than hunting the map for one. Toggling the console releases and re-acquires mouse capture and
+the yaw drifts, so do not expect two screenshots either side of a `cvar` to share a heading — bisect
+by what appears and disappears, not by comparing a fixed view.
+
+The walk-through bug went the other way, and the distinction is worth keeping. Both guesses recorded
+against it here were wrong, and so was a third — that some layer catches things which do not block
+mobs, which `SharedPhysicsSystem.ShouldCollide` rules out, since it ORs the two layer/mask tests and
+so any hard `MidImpassable` layer does block a humanoid. What settled it was reading the *data*: the
+prototype fixture bounds. When the renderer's input is content rather than state, grep the YAML
+before driving the client.
 
 ---
 
 ## 7. Next steps, in order
 
-1. **The two open bugs in §6**, walk-through-geometry first — it is a gameplay bug, not a cosmetic one.
-2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
+1. **The open bug in §6** — the red diagonals.
+2. **Sub-tile edge geometry**, so railings and windoors are drawn where they stand instead of as
+   billboards. See the caveat in §6.
+3. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. The
    floor-plane projection in `EntityPass.DrawFlats` is a working prototype of the maths needed.
-3. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
+4. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
    machines and lockers currently render waist-high.
-4. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
+5. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
    mobs bleed through wall edges. `DrawEntity` does not expose the clipping needed to fix it properly.
-5. Measure a frame time, then work the §5 list.
+6. Measure a frame time, then work the §5 list.
 
 ---
 

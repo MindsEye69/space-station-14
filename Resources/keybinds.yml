@@ -495,6 +495,11 @@ binds:
 - function: ToggleFirstPerson
   type: State
   key: J
+# Shares Shift with Walk on purpose. The handler does not consume the press, so holding Shift both
+# frees the cursor and walks, which is what holding a modifier does in most first-person games.
+- function: FirstPersonCursor
+  type: State
+  key: Shift
 - function: OpenSandboxWindow
   type: State
   key: B

@@ -102,6 +102,11 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
         if (!Visible)
             return;
 
+        // Cursor released for the HUD. Moving the pointer to a button must not drag the view along
+        // with it, or you let go facing somewhere you never chose to look.
+        if (_entMan.System<FirstPersonSystem>().CursorFreed)
+            return;
+
         var sensitivity = _cfg.GetCVar(FirstPersonCVars.MouseSensitivity);
 
         // Subtracted, not added. WallPass fans its rays from Direction - Plane on the left edge to
@@ -217,7 +222,12 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
 
         // With the cursor captured its OS position is meaningless, so aim dead centre: a real
         // crosshair. With capture off the cursor is visible and free-aim is what the player expects.
-        var local = _cfg.GetCVar(FirstPersonCVars.MouseCapture)
+        // ...unless the cursor has been released for the HUD, in which case there is a real pointer
+        // again and clicks should go where it points rather than to the middle of the screen.
+        var aimAtCentre = _cfg.GetCVar(FirstPersonCVars.MouseCapture)
+                          && !_entMan.System<FirstPersonSystem>().CursorFreed;
+
+        var local = aimAtCentre
             ? new Vector2(size.X / 2f, size.Y / 2f)
             : (point - GlobalPixelPosition) / Vector2.Max(PixelSize, Vector2.One) * size;
 

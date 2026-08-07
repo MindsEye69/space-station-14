@@ -42,6 +42,7 @@ namespace Content.Client.Input
             common.AddFunction(ContentKeyFunctions.InspectClientComponent);
             common.AddFunction(ContentKeyFunctions.ToggleRoundEndSummaryWindow);
             common.AddFunction(ContentKeyFunctions.ToggleFirstPerson);
+            common.AddFunction(ContentKeyFunctions.FirstPersonCursor);
 
             // Not in engine, because engine cannot check for sanbox/admin status before starting placement.
             common.AddFunction(ContentKeyFunctions.EditorCopyObject);

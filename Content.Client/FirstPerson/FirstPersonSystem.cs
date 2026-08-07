@@ -86,7 +86,15 @@ public sealed class FirstPersonSystem : EntitySystem
                 {
                     Toggle();
                     return true;
-                }, outsidePrediction: true));
+                }, outsidePrediction: true))
+            // handle: false is load-bearing. Shift is also Walk, and consuming the press here would
+            // silently take walking away in first person.
+            .Bind(ContentKeyFunctions.FirstPersonCursor,
+                InputCmdHandler.FromDelegate(
+                    _ => SetCursorFreed(true),
+                    _ => SetCursorFreed(false),
+                    handle: false,
+                    outsidePrediction: true));
 
         // Must run ahead of the mover so it can swallow the raw WASD press and substitute the
         // grid direction the player actually meant. Passes through untouched while disabled.
@@ -159,7 +167,39 @@ public sealed class FirstPersonSystem : EntitySystem
         if (!Enabled)
             ReleaseAll();
 
-        SetMouseCapture(Enabled);
+        // Leaving the mode with the cursor key still held would strand the flag on, so the next
+        // entry would start with no mouse-look and no obvious reason why.
+        if (!Enabled)
+            CursorFreed = false;
+
+        SetMouseCapture(Enabled && !CursorFreed);
+    }
+
+    /// <summary>
+    /// Whether the player is holding the cursor key, which releases mouse-look so the cursor can
+    /// reach the HUD.
+    /// </summary>
+    /// <remarks>
+    /// Captured mouse-look makes the rest of the game unusable on its own: with the cursor hidden and
+    /// confined there is no pointer to open a context menu with, click a hotbar slot, or pick an
+    /// option out of a verb flyout. Hold-to-free is the standard answer, and it is a hold rather than
+    /// a toggle so there is never a question of which mode you are in.
+    ///
+    /// <see cref="FirstPersonViewport"/> reads this to stop turning the camera while it is set —
+    /// without that, moving the pointer to a HUD button would spin the view with it and you would
+    /// return facing somewhere else entirely.
+    /// </remarks>
+    public bool CursorFreed { get; private set; }
+
+    private void SetCursorFreed(bool freed)
+    {
+        if (CursorFreed == freed)
+            return;
+
+        CursorFreed = freed;
+
+        if (Enabled)
+            SetMouseCapture(!freed);
     }
 
     /// <summary>

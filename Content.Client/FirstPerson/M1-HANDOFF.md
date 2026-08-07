@@ -6,10 +6,10 @@ Per spec §11: what this is, how it was verified, and — importantly — what w
 
 ## Status
 
-**Working and played in a live session.** Walls, corridors, mouse-look, camera-relative movement,
-half-height furniture and floor-flat structures have all been exercised against a running server and
-look right. Performance, ghost/dead states, shuttles, rotated grids and top-down parity have **not**
-been checked — see §5.
+**Playable and played in a live session.** Walls, corridors, mouse-look, camera-relative movement,
+half-height furniture, floor-flat structures and world interaction have all been exercised against a
+running server. Performance, ghost/dead states, shuttles, rotated grids and top-down parity have
+**not** been checked — see §5. Two visual bugs are open — see §6.
 
 ---
 
@@ -113,6 +113,27 @@ Each of these was a bug first. They are recorded because the wrong version looke
    that atlas through `DrawPrimitives` corrupts top-down rendering. Walls use `Texture.White` with
    per-vertex colour. SS14 has no side-elevation wall art anyway.
 
+9. **Interaction needs two separate things, and neither works alone.**
+   `GameplayStateBase.OnKeyBindStateChanged` is the single funnel every world interaction passes
+   through — use, alt-use, examine, drag-drop, context menus — and it only resolves coordinates and a
+   target when `args.Viewport` is non-null *and* implements `IViewportControl`.
+   - The widget implements `IViewportControl`.
+   - The widget calls `ViewportKeyEvent(this, args)` from `KeyBindDown`/`KeyBindUp`. `InputManager`
+     passes **null** for the viewport when the UI declines a bind, so a control must nominate itself
+     — exactly as `ScalingViewport` does. Implementing the interface without this changes nothing.
+
+10. **The crosshair pick must exclude `Contained`.** `PixelToMap` marches a ray in 0.2-tile steps and
+    returns the first point with an entity on it, capped by the wall depth for that column. The
+    lookup's default flags include contained entities, and the player's own worn clothing sits at the
+    player's own position — so the first step hit their shoes and *every click targeted those*. This
+    is the same trap `EntityPass` already documents; it was walked into anyway.
+
+11. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
+    `height / depth`, so a corner just in front of the camera lands hundreds of pixels below the
+    horizon while the tile's far corners sit normally — the quad becomes a long diagonal wedge that
+    sweeps across the view as you walk. Clamping was tried and reverted. Losing the tile underfoot is
+    much cheaper than the artifact.
+
 ### Deviations from the spec
 
 - Default bind is **`J`**, not `V` — `V` is `OpenBackpack`, and `Shift/Ctrl/Alt+V` are all taken.
@@ -132,6 +153,10 @@ Live session against a local server, playing as Captain:
 - Mouse-look tracks the mouse; camera-relative movement walks where you look and steers cleanly.
 - Counters render as short geometry; items on them sit on top rather than sinking.
 - Catwalks and lattice read as floor rather than as grating in your face.
+- **Interaction works.** Examine on a distant carpet returned "carpet — Fancy walking surface";
+  examine on cloth resting on a counter returned "cloth — A raw material", i.e. it targets the object
+  rather than the floor beneath it. Left-click pickup at that range correctly did nothing, being
+  outside hand reach — pickup at close range is still unconfirmed.
 - `dotnet build SpaceStation14.slnx` → 0 errors. `dotnet test Content.Tests` → 419 passed, 0 failed.
 - Client passes the IL sandbox verifier. Note it rejects `stackalloc` (`localloc`) — that was caught
   the hard way.
@@ -151,19 +176,66 @@ Live session against a local server, playing as Captain:
    No parity harness exists.
 4. **Toggle-stress and leak behaviour untested.** The render target is only reallocated on size
    change and disposed in `Dispose`, so it should be fine. Unverified.
-5. **A shutdown assert was seen once** — `EntityLookupSystem.RemoveChildrenFromTerminatingBroadphase`
-   hitting `DebugTools.Assert` during map teardown. No first-person frames in the stack, and it is
-   debug-build-only. Did not recur. Cause unknown.
+5. **A shutdown assert recurs** — `EntityLookupSystem.RemoveChildrenFromTerminatingBroadphase`
+   hitting `DebugTools.Assert` during map teardown on close. No first-person frames in the stack, and
+   `DebugTools.Assert` compiles out of release builds. Probably not ours; cause unknown.
+6. **`GetWorldToScreenMatrix` returns identity** because a perspective projection is not affine and
+   does not fit a `Matrix3x2`. `MapTextOverlay` and `PopupOverlay` consume it, so floating text and
+   popups will be misplaced in first person. `WorldToScreen` is correct point-wise.
+7. **Close-range pickup is unconfirmed.** Examine is proven; putting an item in hand is not.
 
 ---
 
-## 6. Next steps, in order
+## 6. Open bugs
 
-1. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
+1. **You can walk through the waist-high geometry.** Confirmed to be *this code's* half-height
+   surface — the brown `HalfBase` colour, drawn wherever `TileSolidityCache` reports
+   `TileSolidity.Half` from `MidImpassable`. So a solid is being drawn where nothing actually blocks
+   movement. Either the layer test is catching something that does not block mobs, or the tile is
+   being attributed geometry from a neighbouring entity. Start by logging which entity supplies the
+   `MidImpassable` fixture for the tile in front of the player.
+   Bisect with `cvar firstperson.draw_half_height 0`.
+
+2. **Red diagonal lines and dark quads appear over the view, shifting as you move.** Cause unknown.
+   Ruled out: the flat pass and the wall pass, whose colours are fixed greys and a warm brown, and
+   the `GetWorldToScreenMatrix` stub, which only `MapTextOverlay` and `PopupOverlay` consume and
+   which would misplace *text*, not draw lines. Never reproduced in a driven session.
+   Bisect with `cvar firstperson.draw_entities 0` then `cvar firstperson.draw_half_height 0` — if it
+   survives both, nothing this code draws is responsible and it is an overlay on top.
+
+### Method note
+
+Both remaining bugs resisted being solved by reading code. The shoes bug above was found in three
+cycles of driving the client directly — synthetic input via `keybd_event`/`mouse_event` plus a
+temporary sawmill log — after two confident wrong guesses from static reading. Reach for that loop
+earlier. Note `computer-use`'s `request_access` cannot see this client: it resolves against installed
+Start-menu apps and SS14 runs from source.
+
+---
+
+## 7. Next steps, in order
+
+1. **The two open bugs in §6**, walk-through-geometry first — it is a gameplay bug, not a cosmetic one.
+2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. The
    floor-plane projection in `EntityPass.DrawFlats` is a working prototype of the maths needed.
-2. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
+3. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
    machines and lockers currently render waist-high.
-3. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
+4. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
    mobs bleed through wall edges. `DrawEntity` does not expose the clipping needed to fix it properly.
-4. Measure a frame time, then work the §5 list.
+5. Measure a frame time, then work the §5 list.
+
+---
+
+## 8. Running it
+
+The dev server config is tracked and already set up for local work — lobby on, role timers off,
+station events off. See the note at the top of `Content.Server/server_config.toml` about build
+presets only supplying *defaults*, which is what made those three settings fight back.
+
+```
+dotnet build Content.Server -c Debug && ./bin/Content.Server/Content.Server.exe
+dotnet build Content.Client -c Debug && ./bin/Content.Client/Content.Client.exe --connect --connect-address udp://localhost:1212
+```
+
+Then: close the guidebook, **Join**, pick Captain, press **`J`**.

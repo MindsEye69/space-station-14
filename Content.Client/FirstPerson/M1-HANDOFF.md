@@ -184,9 +184,17 @@ Each of these was a bug first. They are recorded because the wrong version looke
     luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
     art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
     brightness the hand-tuned constant had, with the colour now coming from the material.
-    Known limitation: a sprite's layers are not separated, so a carpeted table takes both its top
-    and its side from whichever layer covers more. The side ought to come from the base layer and
-    the top from the layer above it.
+15. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
+    green *sides* looks like a bug and is not one. `TableCarpet` is a single-layer sprite, so there
+    are no layers to separate; what changes is the smoothing state. `full.png` — a table standing
+    alone — has rim `#4F2E18`, the wooden frame. `state_0` through `state_7`, the pieces used once
+    tables smooth into a run, have rims from `#35400F` to `#006100`, because an interior piece has
+    no outer frame to show. The sampler is reporting the art correctly in both cases.
+    This was first mis-diagnosed as the sprite's layers needing to be separated, and a change to
+    take the top from the topmost layer and the side from the base was written before the prototype
+    was checked. It was reverted: the motivating case has one layer, and the rule would have let a
+    damage or blood overlay large enough to pass the coverage threshold drive the surface colour.
+    Check whether a sprite actually has layers before building machinery to separate them.
 
 14. **Floor corners nearer than the near plane are discarded, not clamped.** Screen Y goes as
     `height / depth`, so a corner just in front of the camera lands hundreds of pixels below the
@@ -350,33 +358,30 @@ before driving the client.
 The surface work follows the rule in §3. Milestones 1 and 2 — top caps, and the height sweep that
 set `half_height` to 0.32 — are **done**; what follows continues from there.
 
-1. **Separate a sprite's layers.** The side should come from the base layer and the top from the
-   layer covering it, so a carpeted table gets a green top over wooden sides. Today both come from
-   whichever layer has the most opaque pixels — see the limitation on decision 14. This is the last
-   obviously-wrong thing about the tints, and it is the same carpet-table case that shaped the whole
-   design.
-2. **Painted side profiles.** A small authored library — table, counter, crate, machine, plinth —
-   with fake depth in the paint, selected per entity and tinted from 1. Note this does **not** run
-   into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored profile is
-   a standalone PNG loaded as its own texture. Real textures are available here.
-3. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
+1. **Painted side profiles.** A small authored library — table, counter, crate, machine, plinth —
+   with fake depth in the paint, selected per entity and tinted by `SurfacePalette`. Note this does
+   **not** run into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored
+   profile is a standalone PNG loaded as its own texture. Real textures are available here.
+   The tints are in reasonable shape as they stand — see decision 15 before "fixing" a surface whose
+   colour looks wrong, because the art may simply say that.
+2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. Independent
    of the surface work; interleave rather than block on it. `EntityPass.DrawFlats` and
    `WallPass.AppendCaps` are both working prototypes of the maths.
-4. **Textured top caps.** Putting the actual sprite on the cap does hit decision 8 head-on. The way
+3. **Textured top caps.** Putting the actual sprite on the cap does hit decision 8 head-on. The way
    through is to stop borrowing the shared atlas: render each needed RSI state once into a render
    target we own, cache it, sample that. The expensive one, and the one that makes this look good
    rather than merely legible.
-5. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
-   machines and lockers currently render waist-high. Deliberately after 2, so machines inherit the
+4. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
+   machines and lockers currently render waist-high. Deliberately after 1, so machines inherit the
    side-profile system instead of needing their own.
-6. **The open bug in §6** — the red diagonals. Worth retrying as the passes above land: they add
+5. **The open bug in §6** — the red diagonals. Worth retrying as the passes above land: they add
    vertex batches, so it will either worsen or start reproducing reliably enough to diagnose.
-7. **Sub-tile edge geometry**, so railings and windoors are drawn where they stand instead of as
+6. **Sub-tile edge geometry**, so railings and windoors are drawn where they stand instead of as
    billboards. See the caveat in §6.
-8. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
+7. **Per-column sprite clipping.** Billboards are culled all-or-nothing on their centre column, so
    mobs bleed through wall edges. `DrawEntity` does not expose the clipping needed to fix it properly.
-9. Measure a frame time, then work the §5 list.
+8. Measure a frame time, then work the §5 list.
 
 ---
 

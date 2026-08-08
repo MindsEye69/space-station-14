@@ -185,7 +185,23 @@ Each of these was a bug first. They are recorded because the wrong version looke
     luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
     art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
     brightness the hand-tuned constant had, with the colour now coming from the material.
-15. **`Opaque` is the missing third height bit.** SS14 has only `Mid`/`High` for height, which made
+15. **A door is never a billboard, and the near plane is why.** A door used to flip representation:
+    closed it is geometry (`AirlockLayer` carries `HighImpassable`), open it stops blocking, drops out
+    of geometry and landed in `EntityPass`. A billboard is scaled by `height / depth`, so standing
+    *in* the doorway — depth near zero — blew the card up to fill the screen, floating clear of the
+    opening it was meant to occupy. That was the reported "huge gap between the door model and the
+    walls"; the card was not mis-sized relative to the frame, it was sized by a rule with nothing to
+    do with the frame.
+    `EntityPass` now skips anything with a `DoorComponent` outright, so an open doorway draws
+    nothing. Identify doors by the component, not by inferring from `DoorPassable` or a dropped hard
+    flag — those catch things you do not mean.
+    Note the near-plane trap is general, not a door problem: the cull sits at 0.5 tiles and a card at
+    0.5 depth is already twice screen height. Doors merely hit it constantly because you walk through
+    them. Anything else a player can stand on top of will do the same.
+    Doors also take a fixed accent colour, `TileSolidityCache.DoorTint`, instead of their sampled
+    one — the single deliberate exception to the material rule, argued at the constant.
+
+16. **`Opaque` is the missing third height bit.** SS14 has only `Mid`/`High` for height, which made
     machines, lockers and vending machines render at counter height — an anomaly generator became a
     knee-high grey lump, and because geometry suppresses its billboard you lost the sprite that would
     have identified it. It read as absent.
@@ -202,7 +218,7 @@ Each of these was a bug first. They are recorded because the wrong version looke
     Measured on one column at a fixed view, a machine went from a surface starting at y421 to one
     starting at y339 — roughly double — while a counter in the same frame was untouched.
 
-16. **A hard fixture on a switched-off body blocks nothing.** Open curtains, cargo pallets, cargo
+17. **A hard fixture on a switched-off body blocks nothing.** Open curtains, cargo pallets, cargo
     telepads and security barriers all keep full-tile hard fixtures on real collision layers and then
     set `canCollide: false` on the body. Reading the fixture alone saw a wall where the entity stops
     nothing, and the view grew grey waist-high slabs you walk straight through until you reach a real
@@ -213,7 +229,7 @@ Each of these was a bug first. They are recorded because the wrong version looke
     shape: **the renderer must ask what actually blocks a mob, never a proxy for it.** If a fourth
     turns up, suspect the proxy before suspecting the geometry.
 
-17. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
+18. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
     green *sides* looks like a bug and is not one. `TableCarpet` is a single-layer sprite, so there
     are no layers to separate; what changes is the smoothing state. `full.png` — a table standing
     alone — has rim `#4F2E18`, the wooden frame. `state_0` through `state_7`, the pieces used once
@@ -396,7 +412,7 @@ the wrong one. Prefer whatever fixes a shape over whatever fixes a surface.
    with fake depth in the paint, selected per entity and tinted by `SurfacePalette`. Note this does
    **not** run into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored
    profile is a standalone PNG loaded as its own texture. Real textures are available here.
-   The tints are in reasonable shape as they stand — see decision 17 before "fixing" a surface whose
+   The tints are in reasonable shape as they stand — see decision 18 before "fixing" a surface whose
    colour looks wrong, because the art may simply say that.
 2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. Independent
@@ -406,19 +422,10 @@ the wrong one. Prefer whatever fixes a shape over whatever fixes a surface.
    through is to stop borrowing the shared atlas: render each needed RSI state once into a render
    target we own, cache it, sample that. The expensive one, and the one that makes this look good
    rather than merely legible.
-4. **Doors should never billboard.** A door currently flips representation: closed it is geometry
-   (`AirlockLayer` has `HighImpassable`), open it stops blocking and falls through to `EntityPass` as
-   a camera-facing card. Hence the reported pop-in — a flat grey column until you are close, then the
-   real sprite appears, then a grey cap seals the doorway behind you. The card also cannot fill a
-   perspective-projected opening, which is the visible gap between door and frame, made worse by
-   all-or-nothing column culling (item 6).
-   The fix is a *simplification*: a third category beside geometry and billboard — "structure that is
-   currently passable" — excluded from **both** passes, so an open doorway draws nothing at all.
-   Nothing about a door is served by a card of its top-down sprite. Identify doors by
-   `DoorComponent`, not by inferring from `DoorPassable` or a dropped hard flag, which catches things
-   you do not mean. Give them a deliberate accent colour too: this is the one place the
-   material-accuracy rule should knowingly lose, because a grey door in a grey wall is unfindable and
-   doors are what you navigate by.
+4. **Audit the rest of the near-plane trap.** Doors are fixed (decision 15) but the underlying
+   problem is general: any billboard the player can stand on top of is scaled by `height / depth`
+   past the 0.5-tile cull and explodes across the screen. Doors merely hit it every time you walk
+   through one. Worth a pass over what else a player routinely occupies the same tile as.
 5. **The open bug in §6** — the red diagonals. Worth retrying as the passes above land: they add
    vertex batches, so it will either worsen or start reproducing reliably enough to diagnose.
 6. **Sub-tile edge geometry**, so railings and windoors are drawn where they stand instead of as

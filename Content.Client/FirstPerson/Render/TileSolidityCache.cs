@@ -1,4 +1,5 @@
 using System.Numerics;
+using Content.Shared.Doors.Components;
 using Content.Shared.Physics;
 using Robust.Client.GameObjects;
 using Robust.Shared.GameObjects;
@@ -86,11 +87,28 @@ public sealed class TileSolidityCache
     /// </summary>
     private static readonly Transform Identity = new(Vector2.Zero, 0f);
 
+    /// <summary>
+    /// Doors ignore their sampled colour and take this instead.
+    /// </summary>
+    /// <remarks>
+    /// This is the one place the material-accuracy rule is broken on purpose. A standard airlock's
+    /// sampled tint is honest and useless: airlock grey against wall grey differs by a few levels, so
+    /// a door reads as a faintly different patch of corridor. Doors are what a player navigates by,
+    /// and being findable beats being correct.
+    ///
+    /// The cost, accepted knowingly: departmental airlocks lose their livery, so a security door no
+    /// longer reads red. Blending toward the accent instead would keep some of that, but it also
+    /// weakens the guarantee — and a guarantee is the point. Revisit if department colour turns out
+    /// to matter more in play than door-versus-wall does.
+    /// </remarks>
+    private static readonly SurfaceTint DoorTint = new(Color.FromHex("#b8923c"), Color.FromHex("#856a2c"));
+
     private readonly SharedMapSystem _mapSystem;
     private readonly ISurfacePalette _palette;
     private readonly EntityQuery<FixturesComponent> _fixtureQuery;
     private readonly EntityQuery<SpriteComponent> _spriteQuery;
     private readonly EntityQuery<PhysicsComponent> _physicsQuery;
+    private readonly EntityQuery<DoorComponent> _doorQuery;
 
     private readonly Dictionary<Vector2i, TileSurface> _cache = new();
 
@@ -101,6 +119,7 @@ public sealed class TileSolidityCache
         _fixtureQuery = entMan.GetEntityQuery<FixturesComponent>();
         _spriteQuery = entMan.GetEntityQuery<SpriteComponent>();
         _physicsQuery = entMan.GetEntityQuery<PhysicsComponent>();
+        _doorQuery = entMan.GetEntityQuery<DoorComponent>();
     }
 
     /// <summary>
@@ -216,8 +235,13 @@ public sealed class TileSolidityCache
 
             // Take the colour from whichever entity actually raised the tile's height class, so a
             // tile holding both a table and something shorter is painted as the table.
-            if (solidity != before && _palette.TryGetTint(sprite, out var found))
-                tint = found;
+            if (solidity != before)
+            {
+                if (_doorQuery.HasComponent(uid.Value))
+                    tint = DoorTint;
+                else if (_palette.TryGetTint(sprite, out var found))
+                    tint = found;
+            }
 
             // Nothing taller than this exists, so no need to keep looking.
             if (solidity == TileSolidity.Full)

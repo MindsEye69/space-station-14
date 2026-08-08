@@ -1,5 +1,6 @@
 using System.Numerics;
 using Content.Client.FirstPerson.Camera;
+using Content.Shared.Doors.Components;
 using Robust.Client.GameObjects;
 using Robust.Client.Graphics;
 using Robust.Shared.Map;
@@ -49,6 +50,7 @@ public sealed class EntityPass
 
     private EntityQuery<FixturesComponent> _fixtureQuery;
     private EntityQuery<PhysicsComponent> _physicsQuery;
+    private EntityQuery<DoorComponent> _doorQuery;
 
     public EntityPass(IEntityManager entMan, EntityLookupSystem lookup, SharedTransformSystem xform)
     {
@@ -56,6 +58,7 @@ public sealed class EntityPass
         _xform = xform;
         _fixtureQuery = entMan.GetEntityQuery<FixturesComponent>();
         _physicsQuery = entMan.GetEntityQuery<PhysicsComponent>();
+        _doorQuery = entMan.GetEntityQuery<DoorComponent>();
     }
 
     /// <summary>
@@ -144,6 +147,14 @@ public sealed class EntityPass
             // billboard, or every wall gets drawn twice: once as the correct raycast column, then
             // again as a camera-facing card of its top-down sprite painted over it.
             if (IsWallGeometry(uid))
+                continue;
+
+            // A door is never a billboard, open or shut. Closed it is geometry and excluded above;
+            // open it stops blocking, falls out of geometry, and used to land here — where a card is
+            // scaled by height/depth, so standing in the doorway blew it up to fill the screen,
+            // floating clear of the opening it was meant to be in. An open doorway should simply
+            // draw nothing, which is also what a raycaster wants.
+            if (_doorQuery.HasComponent(uid))
                 continue;
 
             // Floor-flat things — catwalks, lattice, carpets, puddles — are drawn from above in 2D.

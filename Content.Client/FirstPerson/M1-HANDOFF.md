@@ -185,21 +185,27 @@ Each of these was a bug first. They are recorded because the wrong version looke
     luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
     art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
     brightness the hand-tuned constant had, with the colour now coming from the material.
-15. **A door is never a billboard, and the near plane is why.** A door used to flip representation:
-    closed it is geometry (`AirlockLayer` carries `HighImpassable`), open it stops blocking, drops out
-    of geometry and landed in `EntityPass`. A billboard is scaled by `height / depth`, so standing
-    *in* the doorway — depth near zero — blew the card up to fill the screen, floating clear of the
-    opening it was meant to occupy. That was the reported "huge gap between the door model and the
-    walls"; the card was not mis-sized relative to the frame, it was sized by a rule with nothing to
-    do with the frame.
-    `EntityPass` now skips anything with a `DoorComponent` outright, so an open doorway draws
-    nothing. Identify doors by the component, not by inferring from `DoorPassable` or a dropped hard
-    flag — those catch things you do not mean.
-    Note the near-plane trap is general, not a door problem: the cull sits at 0.5 tiles and a card at
-    0.5 depth is already twice screen height. Doors merely hit it constantly because you walk through
-    them. Anything else a player can stand on top of will do the same.
-    Doors also take a fixed accent colour, `TileSolidityCache.DoorTint`, instead of their sampled
-    one — the single deliberate exception to the material rule, argued at the constant.
+15. **Doors are drawn as geometry *and* as a sprite, split by state.** A door is the one entity that
+    appears in both passes, and getting there took a wrong turn worth recording.
+    - **Closed → geometry plus its sprite.** The geometry gives correct occlusion; the sprite is
+      drawn on top of its own column so you see an actual airlock — panels, stripes, status lights —
+      instead of a featureless slab. This is the *only* SS14 art that reads properly head-on in first
+      person, because a door is genuinely a vertical surface photographed face-on.
+    - **Open → nothing at all.** It has stopped blocking, so the player can stand in its tile, and a
+      billboard is scaled by `height / depth`. At near-zero depth the card fills the screen, floating
+      clear of the opening — the reported "huge gap". The card was not mis-sized relative to the
+      frame; it was sized by a rule with nothing to do with the frame.
+    Closed doors need forgiving in their own column. `Depth[]` holds the distance to the *face*, the
+    sprite sits at the tile *centre* — up to a half-diagonal further — so without
+    `EntityPass.SelfOcclusionTolerance` every closed door culls its own sprite and the doorway goes
+    back to being a slab.
+    **The wrong turn:** the first attempt skipped doors in *both* states and gave them a flat accent
+    colour so they would stand out. That deleted the one thing worth looking at. The report was
+    "there's no actual door graphic, only an amber block" — and the right reading of the original
+    symptom was not "a door is drawn wrongly" but "a grey slab is drawn *over* a door". Removing a
+    covering beats inventing a replacement.
+    The near-plane trap itself is general, not a door problem: the cull sits at 0.5 tiles and a card
+    at that depth is already twice screen height. Anything a player can share a tile with will do it.
 
 16. **`Opaque` is the missing third height bit.** SS14 has only `Mid`/`High` for height, which made
     machines, lockers and vending machines render at counter height — an anomaly generator became a

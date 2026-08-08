@@ -23,6 +23,13 @@ public sealed class EntityPass
     private const float PixelsPerMeter = 32f;
 
     /// <summary>
+    /// How much nearer than a sprite the wall depth may be before it counts as occluding, for an
+    /// entity drawn on top of its own geometry. A tile's face can be up to its half-diagonal nearer
+    /// than its centre.
+    /// </summary>
+    private const float SelfOcclusionTolerance = 0.75f;
+
+    /// <summary>
     /// At or below this draw depth an entity lies flat on the floor plane rather than standing up.
     /// </summary>
     /// <remarks>
@@ -146,15 +153,22 @@ public sealed class EntityPass
             // Anything WallPass already rasterises as geometry must not also be drawn as a
             // billboard, or every wall gets drawn twice: once as the correct raycast column, then
             // again as a camera-facing card of its top-down sprite painted over it.
-            if (IsWallGeometry(uid))
-                continue;
+            // Doors are the one thing drawn as geometry *and* as a sprite, and the split is by state
+            // rather than by kind.
+            //
+            // A closed door is geometry, which gives correct occlusion — but flat-shading it hides
+            // the one piece of art in the game that is genuinely worth seeing here, leaving a
+            // featureless slab across the doorway. So its sprite is drawn on top of its own column.
+            //
+            // An open door draws nothing at all. It has stopped blocking, so the player can stand in
+            // its tile, and a billboard is scaled by height/depth — at near-zero depth the card blows
+            // up to fill the screen, floating clear of the opening. That is only ever possible while
+            // open, which is exactly why the two states are treated differently rather than doors
+            // being special-cased as a whole.
+            var isDoor = _doorQuery.HasComponent(uid);
+            var isGeometry = IsWallGeometry(uid);
 
-            // A door is never a billboard, open or shut. Closed it is geometry and excluded above;
-            // open it stops blocking, falls out of geometry, and used to land here — where a card is
-            // scaled by height/depth, so standing in the doorway blew it up to fill the screen,
-            // floating clear of the opening it was meant to be in. An open doorway should simply
-            // draw nothing, which is also what a raycaster wants.
-            if (_doorQuery.HasComponent(uid))
+            if (isDoor ? !isGeometry : isGeometry)
                 continue;
 
             // Floor-flat things — catwalks, lattice, carpets, puddles — are drawn from above in 2D.
@@ -185,8 +199,15 @@ public sealed class EntityPass
                 continue;
 
             // Occluded by a wall in its own column.
+            //
+            // A closed door has to be forgiven its own column. Depth holds the distance to the
+            // *face* it presents, while the sprite is placed at the tile *centre* — up to half a
+            // tile further, and up to a full diagonal when seen from a corner. Without the tolerance
+            // every closed door culls its own sprite and the doorway goes back to being a slab.
             var column = (int) screenX;
-            if (column >= 0 && column < depth.Length && depth[column] < cam.Y)
+            var cullDepth = isDoor ? cam.Y - SelfOcclusionTolerance : cam.Y;
+
+            if (column >= 0 && column < depth.Length && depth[column] < cullDepth)
                 continue;
 
             // SS14 has no z-axis, so an item on a counter has the same coordinates as one on the

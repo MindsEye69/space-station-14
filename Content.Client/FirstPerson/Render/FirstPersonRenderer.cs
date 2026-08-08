@@ -56,10 +56,12 @@ public sealed class FirstPersonRenderer
         Texture wallTexture,
         bool drawEntities,
         bool drawHalfHeight,
-        float halfHeight)
+        float halfHeight,
+        float tallHeight)
     {
         _wallPass.DrawHalfHeight = drawHalfHeight;
         _wallPass.HalfHeight = halfHeight;
+        _wallPass.TallHeight = tallHeight;
 
         _floorPass.Render(handle, camera, width, height);
 
@@ -95,6 +97,7 @@ public sealed class FirstPersonRenderer
             width,
             height,
             maxRange,
-            halfHeight);
+            halfHeight,
+            tallHeight);
     }
 }

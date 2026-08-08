@@ -61,6 +61,7 @@ No server code and no `RobustToolbox` changes.
 | `firstperson.draw_entities` | true | Off isolates geometry from billboards. |
 | `firstperson.draw_half_height` | true | Off isolates full-height walls from waist-height ones. |
 | `firstperson.half_height` | 0.32 | Counter height, tiles. Must stay below `eye_height`. |
+| `firstperson.tall_height` | 0.8 | Machine/locker height, tiles. Deliberately above `eye_height`. |
 
 Set them with the `cvar` command — `cvar firstperson.draw_entities 0`. Typing the bare name does
 nothing; it is not a command.
@@ -184,7 +185,24 @@ Each of these was a bug first. They are recorded because the wrong version looke
     luminance and only hue separates marble from slate; at 0 the scene stays as dark as the unlit
     art. Measured on the same wall, flat was luminance 67, raw sampled 27, normalised 66 — the
     brightness the hand-tuned constant had, with the colour now coming from the material.
-15. **A hard fixture on a switched-off body blocks nothing.** Open curtains, cargo pallets, cargo
+15. **`Opaque` is the missing third height bit.** SS14 has only `Mid`/`High` for height, which made
+    machines, lockers and vending machines render at counter height — an anomaly generator became a
+    knee-high grey lump, and because geometry suppresses its billboard you lost the sprite that would
+    have identified it. It read as absent.
+    `CollisionGroup.MachineLayer` is the only layer carrying `MidImpassable` without
+    `HighImpassable` that is *also* `Opaque` — a machine blocks light, a table does not. `TableLayer`,
+    `HalfWallLayer` and `SlipLayer` all lack it, so that one bit separates the tiers exactly.
+    Machines sit at `firstperson.tall_height` 0.8, deliberately **above** the eye, and that has three
+    consequences worth keeping:
+    - They get **no cap**. Their top is above the eye so it is not visible, and `AppendCaps` needs the
+      eye above the surface for its no-overlap guarantee.
+    - They **write `Depth[]`** so billboards behind them are culled, exactly as a wall does.
+    - They **do not stop the ray**. Stopping it would leave the wall behind undrawn, so ceiling colour
+      would show above the machine's top edge instead of wall.
+    Measured on one column at a fixed view, a machine went from a surface starting at y421 to one
+    starting at y339 — roughly double — while a counter in the same frame was untouched.
+
+16. **A hard fixture on a switched-off body blocks nothing.** Open curtains, cargo pallets, cargo
     telepads and security barriers all keep full-tile hard fixtures on real collision layers and then
     set `canCollide: false` on the body. Reading the fixture alone saw a wall where the entity stops
     nothing, and the view grew grey waist-high slabs you walk straight through until you reach a real
@@ -195,7 +213,7 @@ Each of these was a bug first. They are recorded because the wrong version looke
     shape: **the renderer must ask what actually blocks a mob, never a proxy for it.** If a fourth
     turns up, suspect the proxy before suspecting the geometry.
 
-16. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
+17. **Smoothing states are different art, and the rim knows it.** A carpeted table rendered with
     green *sides* looks like a bug and is not one. `TableCarpet` is a single-layer sprite, so there
     are no layers to separate; what changes is the smoothing state. `full.png` — a table standing
     alone — has rim `#4F2E18`, the wooden frame. `state_0` through `state_7`, the pieces used once
@@ -366,14 +384,19 @@ before driving the client.
 
 ## 7. Next steps, in order
 
-The surface work follows the rule in §3. Milestones 1 and 2 — top caps, and the height sweep that
-set `half_height` to 0.32 — are **done**; what follows continues from there.
+The surface work follows the rule in §3. Top caps, the height sweep that set `half_height` to 0.32,
+per-material tints, and the third height tier are **done**; what follows continues from there.
+
+Ordering note: the height tier was originally last, so machines would inherit the side-profile
+system. That was wrong and playing it proved so. A wrong *height* destroys the silhouette, and
+silhouette is what a player navigates by — plain sides at the right height beat textured sides at
+the wrong one. Prefer whatever fixes a shape over whatever fixes a surface.
 
 1. **Painted side profiles.** A small authored library — table, counter, crate, machine, plinth —
    with fake depth in the paint, selected per entity and tinted by `SurfacePalette`. Note this does
    **not** run into decision 8: that constraint is about the shared *RSI atlas*, whereas an authored
    profile is a standalone PNG loaded as its own texture. Real textures are available here.
-   The tints are in reasonable shape as they stand — see decision 16 before "fixing" a surface whose
+   The tints are in reasonable shape as they stand — see decision 17 before "fixing" a surface whose
    colour looks wrong, because the art may simply say that.
 2. **Floor casting.** `FloorPass` is still two flat colour bands, so the ground has no texture and no
    motion parallax — the single biggest thing making the view feel static while walking. Independent
@@ -383,9 +406,19 @@ set `half_height` to 0.32 — are **done**; what follows continues from there.
    through is to stop borrowing the shared atlas: render each needed RSI state once into a render
    target we own, cache it, sample that. The expensive one, and the one that makes this look good
    rather than merely legible.
-4. **A third height tier.** `MachineLayer` is `MidImpassable` without `HighImpassable`, so vending
-   machines and lockers currently render waist-high. Deliberately after 1, so machines inherit the
-   side-profile system instead of needing their own.
+4. **Doors should never billboard.** A door currently flips representation: closed it is geometry
+   (`AirlockLayer` has `HighImpassable`), open it stops blocking and falls through to `EntityPass` as
+   a camera-facing card. Hence the reported pop-in — a flat grey column until you are close, then the
+   real sprite appears, then a grey cap seals the doorway behind you. The card also cannot fill a
+   perspective-projected opening, which is the visible gap between door and frame, made worse by
+   all-or-nothing column culling (item 6).
+   The fix is a *simplification*: a third category beside geometry and billboard — "structure that is
+   currently passable" — excluded from **both** passes, so an open doorway draws nothing at all.
+   Nothing about a door is served by a card of its top-down sprite. Identify doors by
+   `DoorComponent`, not by inferring from `DoorPassable` or a dropped hard flag, which catches things
+   you do not mean. Give them a deliberate accent colour too: this is the one place the
+   material-accuracy rule should knowingly lose, because a grey door in a grey wall is unfindable and
+   doors are what you navigate by.
 5. **The open bug in §6** — the red diagonals. Worth retrying as the passes above land: they add
    vertex batches, so it will either worsen or start reproducing reliably enough to diagnose.
 6. **Sub-tile edge geometry**, so railings and windoors are drawn where they stand instead of as

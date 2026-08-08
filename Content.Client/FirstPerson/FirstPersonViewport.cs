@@ -53,6 +53,7 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
     private bool _drawEntities;
     private bool _drawHalfHeight;
     private float _halfHeight;
+    private float _tallHeight;
 
     public readonly FirstPersonCamera Camera = new();
 
@@ -143,6 +144,7 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
         _drawEntities = _cfg.GetCVar(FirstPersonCVars.DrawEntities);
         _drawHalfHeight = _cfg.GetCVar(FirstPersonCVars.DrawHalfHeight);
         _halfHeight = _cfg.GetCVar(FirstPersonCVars.HalfHeight);
+        _tallHeight = _cfg.GetCVar(FirstPersonCVars.TallHeight);
 
         handle.RenderInRenderTarget(_target!, _renderAction, Color.Black);
 
@@ -166,7 +168,8 @@ public sealed class FirstPersonViewport : UIWidget, IViewportControl
             _wallTexture,
             _drawEntities,
             _drawHalfHeight,
-            _halfHeight);
+            _halfHeight,
+            _tallHeight);
     }
 
     private void EnsureTarget(Vector2i size)

@@ -52,6 +52,13 @@ public sealed class WallPass
     /// </summary>
     public float HalfHeight = 0.32f;
 
+    /// <summary>
+    /// Height of a machine, locker or vending machine, in tiles. Set from
+    /// <c>firstperson.tall_height</c>. Deliberately *above* the eye: you cannot see over a console
+    /// bank, and the silhouette is the whole point of separating these from counters.
+    /// </summary>
+    public float TallHeight = 0.8f;
+
     /// <summary>Whether waist-height structures are drawn at all.</summary>
     public bool DrawHalfHeight = true;
 
@@ -131,7 +138,13 @@ public sealed class WallPass
                 var hit = _halfHits[i];
                 var tint = _solidity.GetSurface(grid, hit.Tile).Tint;
 
-                AppendColumn(x, horizon, height, camera.Height, hit, HalfHeight, tint?.Side ?? HalfBase);
+                // A machine stands above the eye, so nothing behind it is visible and it has to cull
+                // billboards the way a wall does — but it must not *stop* the ray, or the wall
+                // behind would go undrawn and leave ceiling colour above its top edge.
+                if (hit.Height > camera.Height)
+                    Depth[x] = MathF.Min(Depth[x], hit.Distance);
+
+                AppendColumn(x, horizon, height, camera.Height, hit, hit.Height, tint?.Side ?? HalfBase);
             }
         }
 
@@ -217,7 +230,11 @@ public sealed class WallPass
             var tile = new Vector2i(mapX, mapY);
             var solidity = _solidity.GetSolidity(grid, tile);
 
-            if (solidity == TileSolidity.None || (solidity == TileSolidity.Half && !recordHalf))
+            // draw_half_height gates machines too: both are the mid-height pass, and the switch
+            // exists to isolate that pass from full-height walls.
+            var midHeight = solidity is TileSolidity.Half or TileSolidity.Tall;
+
+            if (solidity == TileSolidity.None || (midHeight && !recordHalf))
                 continue;
 
             var perpDist = MathF.Max(dist, 0.0001f);
@@ -228,20 +245,28 @@ public sealed class WallPass
                 : origin.X + perpDist * rayDir.X;
             wallX -= MathF.Floor(wallX);
 
-            var hit = new Hit(perpDist, wallX, side, tile);
-
             if (solidity == TileSolidity.Full)
             {
-                full = hit;
+                full = new Hit(perpDist, wallX, side, tile, 1f);
                 return halfCount;
             }
 
-            // Waist height: record it and keep going, because the player can see over it.
+            var hit = new Hit(perpDist, wallX, side, tile,
+                solidity == TileSolidity.Tall ? TallHeight : HalfHeight);
+
+            // Record it and keep going. A counter can be seen over; a machine cannot, but the wall
+            // behind it still shows above its top edge, so the ray has to continue for both.
             //
-            // The tile is noted before the per-column cap is applied. Dropping the fifth hit in a
-            // column only costs that column a face, but dropping its tile would punch a hole in a
-            // surface every other column can see.
-            _capTiles.Add(tile);
+            // Only counters get a cap. A machine's top is above the eye, so its top face is not
+            // visible — and AppendCaps depends on the eye being above the surface for its guarantee
+            // that caps and faces never overlap.
+            if (solidity == TileSolidity.Half)
+            {
+                // Noted before the per-column cap is applied. Dropping the fifth hit in a column only
+                // costs that column a face, but dropping its tile would punch a hole in a surface
+                // every other column can see.
+                _capTiles.Add(tile);
+            }
 
             if (halfCount < _halfHits.Length)
                 _halfHits[halfCount++] = hit;
@@ -400,7 +425,7 @@ public sealed class WallPass
             _verts = new DrawVertexUV2DColor[needed];
     }
 
-    private readonly record struct Hit(float Distance, float WallX, int Side, Vector2i Tile)
+    private readonly record struct Hit(float Distance, float WallX, int Side, Vector2i Tile, float Height)
     {
         public bool Valid => Distance > 0f;
     }

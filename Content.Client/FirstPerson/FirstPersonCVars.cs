@@ -77,6 +77,21 @@ public sealed class FirstPersonCVars
         CVarDef.Create("firstperson.half_height", 0.32f, CVar.CLIENTONLY | CVar.ARCHIVE);
 
     /// <summary>
+    /// Height of machines, lockers and vending machines, in tiles.
+    /// </summary>
+    /// <remarks>
+    /// Above <see cref="EyeHeight"/> on purpose. These carry <c>MidImpassable</c> without
+    /// <c>HighImpassable</c>, so before they had a tier of their own an anomaly generator rendered at
+    /// counter height — a knee-high grey lump where a room-dominating machine should be. Silhouette
+    /// is what a player navigates by, and that one was actively misleading.
+    ///
+    /// Being above the eye means no top face is visible, so these get no cap; see
+    /// <c>WallPass.AppendCaps</c>, whose ordering guarantee needs the eye above the surface.
+    /// </remarks>
+    public static readonly CVarDef<float> TallHeight =
+        CVarDef.Create("firstperson.tall_height", 0.8f, CVar.CLIENTONLY | CVar.ARCHIVE);
+
+    /// <summary>
     /// Whether WASD is interpreted relative to the camera (spec §7.3 option A) rather than the grid.
     /// </summary>
     /// <remarks>

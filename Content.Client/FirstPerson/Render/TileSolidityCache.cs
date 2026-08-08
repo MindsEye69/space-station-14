@@ -20,8 +20,14 @@ public enum TileSolidity : byte
     /// <summary>Waist height — a counter or table. The ray passes over it.</summary>
     Half = 1,
 
+    /// <summary>
+    /// Chest height — a machine, locker or vending machine. Above the eye, so it blocks the view,
+    /// but the ray still passes it so the wall behind stays drawn above its top edge.
+    /// </summary>
+    Tall = 2,
+
     /// <summary>Floor to ceiling. The ray stops here.</summary>
-    Full = 2,
+    Full = 3,
 }
 
 /// <summary>
@@ -54,6 +60,23 @@ public sealed class TileSolidityCache
     /// two-level height model that already exists in the data rather than having to be authored.
     /// </remarks>
     public const CollisionGroup HalfMask = CollisionGroup.MidImpassable;
+
+    /// <summary>
+    /// What separates a machine from a counter, given both are <see cref="HalfMask"/>.
+    /// </summary>
+    /// <remarks>
+    /// SS14 has no third height bit, but it does have one that correlates perfectly.
+    /// <see cref="CollisionGroup.MachineLayer"/> is the only layer carrying
+    /// <c>MidImpassable</c> without <c>HighImpassable</c> that is *also* <c>Opaque</c> — because a
+    /// machine blocks light and a table does not. <see cref="CollisionGroup.TableLayer"/>,
+    /// <see cref="CollisionGroup.HalfWallLayer"/> and <see cref="CollisionGroup.SlipLayer"/> all lack
+    /// it, so the test picks out exactly consoles, lockers and vending machines.
+    ///
+    /// Without this they rendered at counter height, and an anomaly generator became a knee-high
+    /// grey lump — worse than untextured, because the silhouette is what you navigate by and this one
+    /// was a lie.
+    /// </remarks>
+    public const CollisionGroup TallMask = CollisionGroup.Opaque;
 
     /// <summary>
     /// The fixture transform used by <see cref="CoversTileCentre"/>. Anchored entities sit at the
@@ -179,8 +202,16 @@ public sealed class TileSolidityCache
                     break;
                 }
 
-                if ((fixture.CollisionLayer & (int) HalfMask) != 0)
-                    solidity = TileSolidity.Half;
+                if ((fixture.CollisionLayer & (int) HalfMask) == 0)
+                    continue;
+
+                var height = (fixture.CollisionLayer & (int) TallMask) != 0
+                    ? TileSolidity.Tall
+                    : TileSolidity.Half;
+
+                // A tile holding both a machine and a table is as tall as the machine.
+                if (height > solidity)
+                    solidity = height;
             }
 
             // Take the colour from whichever entity actually raised the tile's height class, so a

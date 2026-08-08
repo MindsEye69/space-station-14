@@ -115,7 +115,8 @@ public sealed class EntityPass
         int width,
         int height,
         int maxRange,
-        float halfHeight)
+        float halfHeight,
+        float tallHeight)
     {
         _candidates.Clear();
         _billboards.Clear();
@@ -182,7 +183,13 @@ public sealed class EntityPass
             // WallPass now draws. The tile's own solidity is the missing height: if something
             // waist-high occupies it, whatever else is there is resting on top of it.
             var tile = new Vector2i((int) MathF.Floor(gridPos.X), (int) MathF.Floor(gridPos.Y));
-            var lift = solidity.GetSolidity(grid, tile) == TileSolidity.Half ? halfHeight : 0f;
+
+            var lift = solidity.GetSolidity(grid, tile) switch
+            {
+                TileSolidity.Half => halfHeight,
+                TileSolidity.Tall => tallHeight,
+                _ => 0f,
+            };
 
             _billboards.Add(new Billboard(uid, candidate.Comp, screenX, cam.Y, worldRot - gridRot, lift));
         }
